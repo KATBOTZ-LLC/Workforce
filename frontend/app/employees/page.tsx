@@ -7,24 +7,26 @@ import {
   useWorkforce, STAGE_META, WorkerType, Gender, EmploymentType, EmployeeStatus,
   TIMEZONES, ageFromDob, experienceDuration, fmtDate, computePerformance,
   lifecycleStage, LIFECYCLE_META, milestones, journeyEvents,
+  ContractorMode, docRequirements,
 } from '@/app/lib/workforceStore'
 import { useQueryParam } from '@/app/lib/useQueryParam'
 
 export const dynamic = 'force-dynamic'
 
-const TYPES: WorkerType[] = ['Employee', 'Contractor', 'Intern', 'Global Contractor', 'Global Intern']
+const TYPES: WorkerType[] = ['Employee', 'Contractor', 'Intern']
 const EMPLOYMENT_TYPES: EmploymentType[] = ['Full-time', 'Part-time', 'Contract']
 const GENDERS: Gender[] = ['Male', 'Female', 'Other', 'Prefer not to say']
-const DEPARTMENTS = ['Engineering', 'Product', 'Design', 'Marketing', 'Sales', 'HR', 'Finance']
+const DEPARTMENTS = ['Engineering', 'Sales', 'HR', 'Social Media', 'Finance', "CEO's Office"]
 const LEADS = ['Ananya Rao', 'Ravi Shah', 'Priya Nair', 'Karan Singh']
-const LOCATIONS = ['India', 'US', 'Other']
-const COUNTRIES = ['India', 'United States', 'United Kingdom', 'Other']
+const LOCATIONS = ['India', 'US']
+const COUNTRIES = ['India', 'United States', 'Other']
 
 const EMPTY_FORM = {
   firstName: '', lastName: '', gender: 'Prefer not to say' as Gender, dob: '', about: '',
   personalEmail: '', professionalEmail: '', phone: '',
   country: 'India', state: '', address: '', pincode: '', timezone: TIMEZONES[0],
-  type: 'Employee' as WorkerType, employmentType: 'Full-time' as EmploymentType, designation: '',
+  type: 'Employee' as WorkerType, contractorMode: 'independent' as ContractorMode,
+  employmentType: 'Full-time' as EmploymentType, designation: '',
   department: 'Engineering', hrLead: 'Priya Nair', teamLeads: ['Ananya Rao'] as string[],
   location: 'India', dateOfJoining: '', workExperience: '',
 }
@@ -43,15 +45,9 @@ interface Filters {
   types: WorkerType[]
   departments: string[]
   status: EmployeeStatus | 'all'
-  designation: string
-  dojFrom: string
-  dojTo: string
-  minExperienceYears: string
-  minAge: string
-  maxAge: string
 }
 const EMPTY_FILTERS: Filters = {
-  types: [], departments: [], status: 'all', designation: '', dojFrom: '', dojTo: '', minExperienceYears: '', minAge: '', maxAge: '',
+  types: [], departments: [], status: 'all',
 }
 
 export default function EmployeesPage() {
@@ -64,6 +60,13 @@ export default function EmployeesPage() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [exitFor, setExitFor] = useState<string | null>(null)
   const [exitDate, setExitDate] = useState('')
+
+  // Required-document checklist for this worker profile; HR can toggle each mandatory/optional before sending.
+  const [docReqs, setDocReqs] = useState(() => docRequirements({ type: EMPTY_FORM.type, location: EMPTY_FORM.location }).map(d => ({ ...d })))
+  useEffect(() => {
+    setDocReqs(docRequirements({ type: form.type, location: form.location, contractorMode: form.contractorMode }).map(d => ({ ...d })))
+  }, [form.type, form.location, form.contractorMode])
+  const toggleDocMandatory = (key: string) => setDocReqs(rs => rs.map(r => r.key === key ? { ...r, mandatory: !r.mandatory } : r))
 
   const [showFilters, setShowFilters] = useState(false)
   const [preset, setPreset] = useState<string | null>(null)
@@ -96,7 +99,8 @@ export default function EmployeesPage() {
       professionalEmail: form.professionalEmail || `${form.firstName}.${form.lastName}`.toLowerCase() + '@katbotz.com',
       status: 'active' as EmployeeStatus,
     }
-    const w = createWorker(payload)
+    const documents = docReqs.map(d => ({ key: d.key, label: d.label, mandatory: d.mandatory, link: d.link, status: 'not_uploaded' as const }))
+    const w = createWorker(payload, documents)
     setCreated({ name: w.name, token: w.token })
     setShowForm(false)
     setForm(EMPTY_FORM)
@@ -133,9 +137,7 @@ export default function EmployeesPage() {
   }
 
   const activeFilterCount =
-    filters.types.length + filters.departments.length + (filters.status !== 'all' ? 1 : 0) +
-    (filters.designation ? 1 : 0) + (filters.dojFrom ? 1 : 0) + (filters.dojTo ? 1 : 0) +
-    (filters.minExperienceYears ? 1 : 0) + (filters.minAge ? 1 : 0) + (filters.maxAge ? 1 : 0)
+    filters.types.length + filters.departments.length + (filters.status !== 'all' ? 1 : 0)
 
   const clearFilters = () => { setFilters(EMPTY_FILTERS); setPreset(null) }
 
@@ -147,16 +149,6 @@ export default function EmployeesPage() {
     if (filters.types.length && !filters.types.includes(w.type)) return false
     if (filters.departments.length && !filters.departments.includes(w.department)) return false
     if (filters.status !== 'all' && w.status !== filters.status) return false
-    if (filters.designation && !w.designation.toLowerCase().includes(filters.designation.toLowerCase())) return false
-    if (filters.dojFrom && w.dateOfJoining < filters.dojFrom) return false
-    if (filters.dojTo && w.dateOfJoining > filters.dojTo) return false
-    if (filters.minExperienceYears) {
-      const months = monthsSince(w.dateOfJoining)
-      if (months < Number(filters.minExperienceYears) * 12) return false
-    }
-    const age = ageFromDob(w.dob)
-    if (filters.minAge && (age === null || age < Number(filters.minAge))) return false
-    if (filters.maxAge && (age === null || age > Number(filters.maxAge))) return false
     return true
   }), [workers, query, filters])
 
@@ -230,25 +222,20 @@ export default function EmployeesPage() {
                   <Field label="Professional Email (created after verification)">
                     <input type="email" value={form.professionalEmail} onChange={e => setForm({ ...form, professionalEmail: e.target.value })} placeholder="name@katbotz.com" />
                   </Field>
-                  <Field label="Phone Number"><input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="+91 90000 00000" /></Field>
+                  <Field label="Phone Number"><input type="tel" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="+91 90000 00000" /></Field>
                 </FormSection>
 
-                <FormSection title="Address">
+                <FormSection title="Region">
                   <Field label="Country">
                     <select value={form.country} onChange={e => setForm({ ...form, country: e.target.value })}>
                       {COUNTRIES.map(c => <option key={c}>{c}</option>)}
                     </select>
                   </Field>
-                  <Field label="State"><input value={form.state} onChange={e => setForm({ ...form, state: e.target.value })} /></Field>
-                  <Field label="Pincode"><input value={form.pincode} onChange={e => setForm({ ...form, pincode: e.target.value })} /></Field>
                   <Field label="Timezone">
                     <select value={form.timezone} onChange={e => setForm({ ...form, timezone: e.target.value })}>
                       {TIMEZONES.map(t => <option key={t}>{t}</option>)}
                     </select>
                   </Field>
-                  <div className="md:col-span-2">
-                    <Field label="Address"><input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} /></Field>
-                  </div>
                 </FormSection>
 
                 <FormSection title="Employment">
@@ -257,6 +244,14 @@ export default function EmployeesPage() {
                       {TYPES.map(t => <option key={t}>{t}</option>)}
                     </select>
                   </Field>
+                  {form.type === 'Contractor' && (
+                    <Field label="Engagement Mode">
+                      <select value={form.contractorMode} onChange={e => setForm({ ...form, contractorMode: e.target.value as ContractorMode })}>
+                        <option value="independent">Independent Contractor</option>
+                        <option value="c2c">Staffing Agency / C2C</option>
+                      </select>
+                    </Field>
+                  )}
                   <Field label="Employment Type">
                     <select value={form.employmentType} onChange={e => setForm({ ...form, employmentType: e.target.value as EmploymentType })}>
                       {EMPLOYMENT_TYPES.map(t => <option key={t}>{t}</option>)}
@@ -279,7 +274,6 @@ export default function EmployeesPage() {
                     </select>
                   </Field>
                   <Field label="Date of Joining *"><input type="date" value={form.dateOfJoining} onChange={e => setForm({ ...form, dateOfJoining: e.target.value })} required /></Field>
-                  <Field label="Prior Work Experience"><input value={form.workExperience} onChange={e => setForm({ ...form, workExperience: e.target.value })} placeholder="e.g. 3 years" /></Field>
                   <div className="md:col-span-2">
                     <span className="block text-sm font-medium text-brand-charcoal mb-1.5">Team Lead(s) — one or more</span>
                     <div className="flex flex-wrap gap-2">
@@ -294,6 +288,29 @@ export default function EmployeesPage() {
                         )
                       })}
                     </div>
+                  </div>
+                </FormSection>
+
+                <FormSection title="Document Requirements">
+                  <div className="md:col-span-2">
+                    <p className="text-sm text-brand-slate-gray mb-3">
+                      Auto-selected for <span className="font-medium text-brand-charcoal">{form.location === 'US' ? 'USA' : 'India'} · {form.type}{form.type === 'Contractor' ? ` · ${form.contractorMode === 'c2c' ? 'Staffing Agency / C2C' : 'Independent'}` : ''}</span>. Toggle each as mandatory or optional — the worker must upload all mandatory documents.
+                    </p>
+                    <div className="space-y-1.5">
+                      {docReqs.map(d => (
+                        <div key={d.key} className="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-brand-gray">
+                          <span className="text-sm text-brand-charcoal">
+                            {d.label}
+                            {d.link && <a href={d.link} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="ml-2 text-xs text-brand-royal-blue hover:underline">Download →</a>}
+                          </span>
+                          <button type="button" onClick={() => toggleDocMandatory(d.key)}
+                            className={`text-[11px] font-semibold px-2.5 py-1 rounded-full flex-shrink-0 transition ${d.mandatory ? 'bg-brand-royal-blue text-white' : 'bg-brand-off-white text-brand-slate-gray border border-brand-gray'}`}>
+                            {d.mandatory ? 'Mandatory' : 'Optional'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-xs text-brand-slate-gray mt-2">{docReqs.filter(d => d.mandatory).length} mandatory · {docReqs.filter(d => !d.mandatory).length} optional</p>
                   </div>
                 </FormSection>
 
@@ -360,12 +377,6 @@ export default function EmployeesPage() {
                     <option value="inactive">Inactive</option>
                   </select>
                 </div>
-                <Field label="Designation contains"><input value={filters.designation} onChange={e => setFilters({ ...filters, designation: e.target.value })} placeholder="e.g. Developer" /></Field>
-                <Field label="Joined after"><input type="date" value={filters.dojFrom} onChange={e => setFilters({ ...filters, dojFrom: e.target.value })} /></Field>
-                <Field label="Joined before"><input type="date" value={filters.dojTo} onChange={e => setFilters({ ...filters, dojTo: e.target.value })} /></Field>
-                <Field label="Min. experience (years)"><input type="number" min={0} value={filters.minExperienceYears} onChange={e => setFilters({ ...filters, minExperienceYears: e.target.value })} /></Field>
-                <Field label="Min. age"><input type="number" min={0} value={filters.minAge} onChange={e => setFilters({ ...filters, minAge: e.target.value })} /></Field>
-                <Field label="Max. age"><input type="number" min={0} value={filters.maxAge} onChange={e => setFilters({ ...filters, maxAge: e.target.value })} /></Field>
               </div>
             )}
           </div>
@@ -399,7 +410,7 @@ export default function EmployeesPage() {
 
                   <div className="mt-4 space-y-1 text-sm text-brand-slate-gray">
                     <p>{w.accountCreated ? w.professionalEmail : w.personalEmail}</p>
-                    <p className="text-xs">{w.phone} · {w.location}</p>
+                    <p className="text-xs">{w.phone ? `${w.phone} · ` : ''}{w.location}</p>
                     <p className="text-xs">HR: {w.hrLead} · Team: {w.teamLeads.join(', ')}</p>
                     <p className="text-xs">
                       {w.type} · {w.employmentType} · Joined {fmtDate(w.dateOfJoining)} ({experienceDuration(w.dateOfJoining)})
@@ -500,6 +511,7 @@ function WorkerPreview({ worker: w, onClose }: {
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Draft>(pickDraft(w))
+  const [viewDoc, setViewDoc] = useState<PreviewWorker['documents'][number] | null>(null)
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft(d => ({ ...d, [k]: v }))
   const startEdit = () => { setDraft(pickDraft(w)); setEditing(true) }
@@ -584,7 +596,7 @@ function WorkerPreview({ worker: w, onClose }: {
               <>
                 <ERow label="Personal email"><input type="email" value={draft.personalEmail} onChange={e => set('personalEmail', e.target.value)} /></ERow>
                 <ERow label="Professional email"><input type="email" value={draft.professionalEmail} onChange={e => set('professionalEmail', e.target.value)} /></ERow>
-                <ERow label="Phone"><input value={draft.phone} onChange={e => set('phone', e.target.value)} /></ERow>
+                <ERow label="Phone"><input type="tel" value={draft.phone} onChange={e => set('phone', e.target.value)} /></ERow>
               </>
             ) : (
               <>
@@ -708,16 +720,27 @@ function WorkerPreview({ worker: w, onClose }: {
 
           {/* Documents — read-only (verification happens in the Onboarding section) */}
           <PreviewSection title={`Documents (${approved}/${w.documents.length} verified)`}>
-            {w.documents.map(d => (
-              <div key={d.key} className="flex items-center justify-between gap-3 py-2">
-                <div className="min-w-0">
-                  <p className="text-sm text-brand-charcoal">{d.label}</p>
-                  {d.fileName && <p className="text-xs text-brand-slate-gray truncate">{d.fileName}</p>}
-                  {d.status === 'rejected' && d.reason && <p className="text-xs text-brand-burgundy">Rejected: {d.reason}</p>}
+            {w.documents.map(d => {
+              const uploaded = d.status !== 'not_uploaded'
+              return (
+                <div key={d.key} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm text-brand-charcoal">
+                      {d.label}
+                      {d.mandatory === false && <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-brand-off-white text-brand-slate-gray border border-brand-gray align-middle">Optional</span>}
+                    </p>
+                    {d.fileName && <p className="text-xs text-brand-slate-gray truncate">{d.fileName}</p>}
+                    {d.status === 'rejected' && d.reason && <p className="text-xs text-brand-burgundy">Rejected: {d.reason}</p>}
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {uploaded && (
+                      <button onClick={() => setViewDoc(d)} className="text-xs font-semibold px-2.5 py-1 rounded-lg border border-brand-gray text-brand-royal-blue hover:bg-brand-off-white transition">View</button>
+                    )}
+                    <DocPill status={d.status} />
+                  </div>
                 </div>
-                <DocPill status={d.status} />
-              </div>
-            ))}
+              )
+            })}
           </PreviewSection>
 
           {/* Projects */}
@@ -750,6 +773,30 @@ function WorkerPreview({ worker: w, onClose }: {
           )}
         </div>
       </div>
+
+      {/* Document viewer — demo scan (random placeholder image) */}
+      {viewDoc && (
+        <div className="absolute inset-0 z-[60] flex items-center justify-center p-6" onClick={() => setViewDoc(null)}>
+          <div className="absolute inset-0 bg-brand-charcoal/70 backdrop-blur-sm" />
+          <div className="relative bg-white rounded-2xl overflow-hidden shadow-2xl max-w-lg w-full animate-scale-in" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-brand-gray flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-brand-charcoal truncate">{viewDoc.label}</p>
+                <p className="text-xs text-brand-slate-gray truncate">{viewDoc.fileName || 'scan.jpg'} · demo scan</p>
+              </div>
+              <button onClick={() => setViewDoc(null)} className="text-brand-slate-gray hover:text-brand-charcoal text-2xl leading-none flex-shrink-0">×</button>
+            </div>
+            <img
+              src={demoScan(`${w.id}-${viewDoc.key}`, viewDoc.label, w.name)}
+              alt={`${viewDoc.label} (demo)`}
+              className="w-full h-auto block bg-brand-off-white"
+            />
+            <div className="px-5 py-2.5 bg-brand-off-white">
+              <p className="text-[11px] text-brand-slate-gray">Placeholder image for demo purposes — no real document is stored.</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -782,6 +829,33 @@ function PreviewStat({ label, value }: { label: string; value: string }) {
     </div>
   )
 }
+/* Self-contained demo "document scan" — an inline SVG data URI (no network needed). */
+function demoScan(seed: string, label: string, owner: string): string {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
+  const hue = h % 360
+  const band = `hsl(${hue} 55% 42%)`
+  const tint = `hsl(${hue} 60% 96%)`
+  const line = (x: number, y: number, wid: number) => `<rect x="${x}" y="${y}" width="${wid}" height="8" rx="4" fill="#CBD5E1"/>`
+  const initials = owner.split(' ').map(n => n[0]).slice(0, 2).join('')
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480">
+    <rect width="720" height="480" fill="${tint}"/>
+    <rect x="40" y="40" width="640" height="400" rx="14" fill="#ffffff" stroke="#E2E8F0" stroke-width="2"/>
+    <rect x="40" y="40" width="640" height="64" rx="14" fill="${band}"/>
+    <rect x="40" y="86" width="640" height="18" fill="${band}"/>
+    <text x="66" y="82" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#ffffff">${label.replace(/&/g, '&amp;').slice(0, 40)}</text>
+    <rect x="66" y="140" width="150" height="180" rx="8" fill="${tint}" stroke="#CBD5E1" stroke-width="2"/>
+    <circle cx="141" cy="205" r="42" fill="${band}" opacity="0.85"/>
+    <text x="141" y="217" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${initials}</text>
+    <rect x="66" y="332" width="150" height="12" rx="6" fill="#CBD5E1"/>
+    ${line(250, 150, 380)}${line(250, 182, 320)}${line(250, 214, 360)}${line(250, 246, 260)}${line(250, 278, 340)}${line(250, 310, 300)}
+    <rect x="250" y="352" width="180" height="40" rx="6" fill="none" stroke="#CBD5E1" stroke-width="2" stroke-dasharray="6 5"/>
+    <text x="340" y="377" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#94A3B8">Signature</text>
+    <text x="654" y="420" text-anchor="end" font-family="Arial, sans-serif" font-size="12" fill="#94A3B8">DEMO · not a real document</text>
+  </svg>`
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`
+}
+
 function PreviewSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="bg-white rounded-2xl border border-brand-gray p-5">
@@ -807,14 +881,6 @@ function DocPill({ status }: { status: string }) {
   }
   const m = map[status] || map.not_uploaded
   return <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full" style={{ color: m.color, background: m.bg }}>{m.label}</span>
-}
-
-function monthsSince(dateStr: string): number {
-  const start = new Date(dateStr + 'T00:00:00Z')
-  const end = new Date()
-  let months = (end.getUTCFullYear() - start.getUTCFullYear()) * 12 + (end.getUTCMonth() - start.getUTCMonth())
-  if (end.getUTCDate() < start.getUTCDate()) months--
-  return Math.max(0, months)
 }
 
 function FormSection({ title, children }: { title: string; children: React.ReactNode }) {

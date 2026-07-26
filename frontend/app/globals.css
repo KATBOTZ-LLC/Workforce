@@ -92,11 +92,13 @@ code {
 }
 
 /* Form styles */
+input:not([type]),
 input[type='text'],
 input[type='email'],
 input[type='password'],
 input[type='number'],
 input[type='date'],
+input[type='tel'],
 select,
 textarea {
   @apply w-full px-4 py-2 border border-brand-gray rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent bg-white text-brand-navy;

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import Sidebar from '@/app/layout/Sidebar'
 import {
@@ -152,6 +152,7 @@ function MyPerformance({ workerId }: { workerId: string | null }) {
                 <h2 className="text-base font-semibold text-brand-charcoal mb-4">Feedback &amp; 1:1 Notes</h2>
                 <FeedbackList notes={me.feedback} />
               </div>
+              <GoogleFormCard admin={false} />
             </div>
           )}
         </main>
@@ -283,6 +284,7 @@ function AdminPerformance() {
                     </form>
                     <FeedbackList notes={selected.feedback} />
                   </div>
+                  <GoogleFormCard admin={true} />
                 </>
               )}
             </div>
@@ -290,5 +292,51 @@ function AdminPerformance() {
         </main>
       </div>
     </>
+  )
+}
+
+/* ================= Attached Google Form (reviews / feedback) ================= */
+const PERF_FORM_KEY = 'wop-perf-form-url'
+function toEmbed(url: string): string {
+  const u = url.trim()
+  if (!u) return ''
+  if (u.includes('embedded=true')) return u
+  return u + (u.includes('?') ? '&' : '?') + 'embedded=true'
+}
+function GoogleFormCard({ admin }: { admin: boolean }) {
+  const [url, setUrl] = useState('')
+  const [draft, setDraft] = useState('')
+  const [saved, setSaved] = useState(false)
+  useEffect(() => {
+    try { const v = localStorage.getItem(PERF_FORM_KEY) || ''; setUrl(v); setDraft(v) } catch { /* ignore */ }
+  }, [])
+  const save = () => {
+    const v = draft.trim()
+    try { localStorage.setItem(PERF_FORM_KEY, v) } catch { /* ignore */ }
+    setUrl(v); setSaved(true); setTimeout(() => setSaved(false), 1600)
+  }
+  return (
+    <div className="bg-white rounded-2xl border border-brand-gray p-6">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+        <h2 className="text-base font-semibold text-brand-charcoal">Review / Feedback Form</h2>
+        {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm text-brand-royal-blue hover:underline">Open in new tab →</a>}
+      </div>
+      {admin && (
+        <div className="flex items-center gap-2 mb-4">
+          <input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Paste a Google Form link (…/viewform)" className="flex-1 text-sm" />
+          <button onClick={save} className="btn-primary text-sm whitespace-nowrap">Attach</button>
+          {saved && <span className="text-sm text-emerald-600 font-medium">Saved ✓</span>}
+        </div>
+      )}
+      {url ? (
+        <div className="rounded-xl overflow-hidden border border-brand-gray">
+          <iframe src={toEmbed(url)} title="Performance form" className="w-full" style={{ height: 520 }} />
+        </div>
+      ) : (
+        <p className="text-sm text-brand-slate-gray py-6 text-center">
+          {admin ? 'No form attached yet. Paste a Google Form link above to embed it here for the team.' : 'No review form has been shared yet.'}
+        </p>
+      )}
+    </div>
   )
 }

@@ -335,7 +335,7 @@ function AdminDashboard() {
 
   // Real composition — actual workers grouped by type
   const TYPE_COLORS: Record<string, string> = {
-    Employee: '#162660', Contractor: '#5B77C4', Intern: '#94A3B8', 'Global Contractor': '#F59E0B', 'Global Intern': '#800020',
+    Employee: '#162660', Contractor: '#5B77C4', Intern: '#94A3B8',
   }
   const byType = Object.entries(workers.reduce((acc, w) => { acc[w.type] = (acc[w.type] || 0) + 1; return acc }, {} as Record<string, number>))
     .map(([label, value]) => ({ label, value, color: TYPE_COLORS[label] || '#162660' }))

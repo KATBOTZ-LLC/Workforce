@@ -24,8 +24,8 @@ function useNowMs() {
 
 export const dynamic = 'force-dynamic'
 
-const STATUSES: AttendanceStatus[] = ['present', 'wfh', 'leave', 'absent']
-const TYPES: WorkerType[] = ['Employee', 'Contractor', 'Intern', 'Global Contractor', 'Global Intern']
+const STATUSES: AttendanceStatus[] = ['present', 'leave', 'absent']
+const TYPES: WorkerType[] = ['Employee', 'Contractor', 'Intern']
 const DEPARTMENTS = ['Engineering', 'Product', 'Design', 'Marketing', 'Sales', 'HR', 'Finance']
 
 const PRESETS: { label: string; status: EmployeeStatus; type: WorkerType }[] = [

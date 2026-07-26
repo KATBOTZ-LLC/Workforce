@@ -8,7 +8,7 @@ import { PieChart, LineChart } from '@/app/lib/charts'
 export const dynamic = 'force-dynamic'
 
 const TYPE_COLORS: Record<WorkerType, string> = {
-  Employee: '#162660', Contractor: '#5B77C4', Intern: '#94A3B8', 'Global Contractor': '#F59E0B', 'Global Intern': '#800020',
+  Employee: '#162660', Contractor: '#5B77C4', Intern: '#94A3B8',
 }
 
 export default function ReportsPage() {

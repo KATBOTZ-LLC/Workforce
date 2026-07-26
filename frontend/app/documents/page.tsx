@@ -59,7 +59,11 @@ function MyDocuments({ workerId }: { workerId: string | null }) {
                   return (
                     <div key={doc.key} className="p-5 flex items-center justify-between gap-4">
                       <div className="min-w-0">
-                        <p className="font-medium text-brand-charcoal">{doc.label}</p>
+                        <p className="font-medium text-brand-charcoal">
+                          {doc.label}
+                          {doc.mandatory === false && <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-brand-off-white text-brand-slate-gray border border-brand-gray align-middle">Optional</span>}
+                          {doc.link && <a href={doc.link} target="_blank" rel="noopener noreferrer" className="ml-2 text-xs text-brand-royal-blue hover:underline">Download form →</a>}
+                        </p>
                         <p className="text-xs text-brand-slate-gray mt-0.5">{doc.status === 'not_uploaded' ? 'Not uploaded yet' : doc.fileName}</p>
                         {rej && <p className="text-xs text-brand-burgundy mt-0.5">Rejected: {doc.reason}</p>}
                       </div>
@@ -265,7 +269,11 @@ function AdminDocuments() {
                                 className="w-4 h-4 rounded border-brand-gray flex-shrink-0 disabled:opacity-30"
                               />
                               <div className="min-w-0 flex-1">
-                                <p className="font-medium text-brand-charcoal">{doc.label}</p>
+                                <p className="font-medium text-brand-charcoal">
+                                  {doc.label}
+                                  {doc.mandatory === false && <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-brand-off-white text-brand-slate-gray border border-brand-gray align-middle">Optional</span>}
+                                  {doc.link && <a href={doc.link} target="_blank" rel="noopener noreferrer" className="ml-2 text-xs text-brand-royal-blue hover:underline">Download form →</a>}
+                                </p>
                                 <p className="text-xs text-brand-slate-gray mt-0.5">
                                   {doc.status === 'not_uploaded' ? 'Not uploaded yet' : doc.fileName}
                                 </p>

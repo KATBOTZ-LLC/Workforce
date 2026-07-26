@@ -23,7 +23,6 @@ export default function Sidebar() {
     { icon: '', label: 'Approvals', href: '/approvals?role=admin' },
     { icon: '', label: 'Performance', href: '/performance?role=admin' },
     { icon: '', label: 'Notifications', href: '/notifications?role=admin' },
-    { icon: '', label: 'Reports', href: '/reports?role=admin' },
     { icon: '', label: 'Settings', href: '/settings?role=admin' },
   ]
 
