@@ -499,11 +499,11 @@ function WorkerPreview({ worker: w, onClose }: {
   worker: PreviewWorker
   onClose: () => void
 }) {
-  const { updateWorker, leaveRequests } = useWorkforce()
+  const { updateWorker, leaveRequests, monthlyReviews } = useWorkforce()
   const approved = w.documents.filter(d => d.status === 'approved').length
   const age = ageFromDob(w.dob)
   const meta = STAGE_META[w.stage]
-  const perf = computePerformance(w)
+  const perf = computePerformance(w, monthlyReviews)
   const life = lifecycleStage(w)
   const lifeMeta = LIFECYCLE_META[life]
   const stones = milestones(w)

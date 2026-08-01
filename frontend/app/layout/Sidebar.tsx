@@ -22,6 +22,7 @@ export default function Sidebar() {
     { icon: '', label: 'Leave', href: '/leave?role=admin' },
     { icon: '', label: 'Approvals', href: '/approvals?role=admin' },
     { icon: '', label: 'Performance', href: '/performance?role=admin' },
+    { icon: '', label: 'Handbook', href: '/handbook?role=admin' },
     { icon: '', label: 'Notifications', href: '/notifications?role=admin' },
     { icon: '', label: 'Settings', href: '/settings?role=admin' },
   ]
@@ -36,6 +37,7 @@ export default function Sidebar() {
     { icon: '', label: 'My Attendance', href: `/attendance?role=employee${wq}` },
     { icon: '', label: 'My Leave', href: `/leave?role=employee${wq}` },
     { icon: '', label: 'My Performance', href: `/performance?role=employee${wq}` },
+    { icon: '', label: 'Handbook', href: `/handbook?role=employee${wq}` },
     { icon: '', label: 'Notifications', href: `/notifications?role=employee${wq}` },
   ]
 

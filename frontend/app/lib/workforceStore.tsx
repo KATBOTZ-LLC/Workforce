@@ -6,7 +6,7 @@
  * whole app shares one live dataset across pages without a backend.
  */
 
-import React, { createContext, useContext, useEffect, useReducer } from 'react'
+import React, { createContext, useContext, useEffect, useReducer, useRef } from 'react'
 
 export type WorkerType = 'Employee' | 'Contractor' | 'Intern'
 export type Region = 'India' | 'US'
@@ -105,6 +105,54 @@ export interface FeedbackNote {
   text: string
   author: string
   createdAt: string
+}
+
+/* ---------- Monthly performance review workflow ---------- */
+// Pending → Employee Submitted → Team Lead Review → HR Review → Finalized (Bonus Eligible flagged separately)
+export type ReviewStage = 'pending' | 'employee_submitted' | 'team_lead_review' | 'hr_review' | 'finalized'
+export const REVIEW_STAGES: ReviewStage[] = ['pending', 'employee_submitted', 'team_lead_review', 'hr_review', 'finalized']
+export const REVIEW_STAGE_META: Record<ReviewStage, { label: string; color: string; bg: string }> = {
+  pending:            { label: 'Pending',          color: '#64748B', bg: '#F1F5F9' },
+  employee_submitted: { label: 'Employee Submitted', color: '#162660', bg: '#E8EEFB' },
+  team_lead_review:   { label: 'Team Lead Review',  color: '#B45309', bg: '#FEF3E2' },
+  hr_review:          { label: 'HR Review',         color: '#5B77C4', bg: '#EEF2F7' },
+  finalized:          { label: 'Finalized',         color: '#0F7A46', bg: '#E8F6EF' },
+}
+export interface MonthlyReview {
+  id: string
+  workerId: string
+  month: string          // 'YYYY-MM'
+  stage: ReviewStage
+  selfRating?: number     // 1–5
+  selfComment?: string
+  selfSubmittedAt?: string
+  tlRating?: number
+  tlFeedback?: string
+  tlBy?: string
+  tlAt?: string
+  hrRating?: number
+  hrFeedback?: string
+  hrBy?: string
+  hrAt?: string
+  bonusApproved?: boolean
+  bonusDecidedBy?: string
+  bonusDecidedAt?: string
+  finalizedAt?: string
+  formSentAt?: string     // when HR/TL sent the review form link to the employee
+}
+export function currentMonth(): string { return todayStr().slice(0, 7) }
+export function monthLabel(m: string): string {
+  const [y, mo] = m.split('-').map(Number)
+  return new Date(Date.UTC(y, mo - 1, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+}
+export function reviewStageIndex(s: ReviewStage): number { return REVIEW_STAGES.indexOf(s) }
+// Bonus eligible when a manager rated the employee higher than their own self-rating.
+export function bonusEligible(r: MonthlyReview): boolean {
+  if (r.selfRating == null) return false
+  return (r.tlRating != null && r.tlRating > r.selfRating) || (r.hrRating != null && r.hrRating > r.selfRating)
+}
+export function monthlyReviewFor(reviews: MonthlyReview[], workerId: string, month: string): MonthlyReview | undefined {
+  return reviews.find(r => r.workerId === workerId && r.month === month)
 }
 
 /* Leave management */
@@ -784,11 +832,22 @@ function seed(): State {
     w.reportsToId = u && u.leadId && u.leadId !== w.id ? u.leadId : FOUNDER_ID
   })
   const auditLog: AuditEntry[] = []
-  return { workers, notifications, activity, leaveRequests, holidays, orgUnits, auditLog }
+  const monthlyReviews: MonthlyReview[] = [
+    // finalized months with all three ratings + a bonus example
+    { id: 'mr-maya-5', workerId: 'w-maya', month: '2026-05', stage: 'finalized', selfRating: 4, selfComment: 'Shipped the onboarding revamp.', selfSubmittedAt: '2026-05-31T09:00:00.000Z', tlRating: 4, tlFeedback: 'Strong delivery.', tlBy: 'Ravi Shah', tlAt: '2026-06-02T09:00:00.000Z', hrRating: 5, hrFeedback: 'Exceptional cross-team leadership.', hrBy: 'Priya Nair', hrAt: '2026-06-03T09:00:00.000Z', bonusApproved: true, bonusDecidedBy: 'Priya Nair', bonusDecidedAt: '2026-06-04T09:00:00.000Z', finalizedAt: '2026-06-04T09:00:00.000Z' },
+    { id: 'mr-maya-6', workerId: 'w-maya', month: '2026-06', stage: 'finalized', selfRating: 5, selfComment: 'Great month.', selfSubmittedAt: '2026-06-30T09:00:00.000Z', tlRating: 4, tlFeedback: 'Consistent.', tlBy: 'Ravi Shah', tlAt: '2026-07-02T09:00:00.000Z', hrRating: 4, hrFeedback: 'Solid.', hrBy: 'Priya Nair', hrAt: '2026-07-03T09:00:00.000Z', finalizedAt: '2026-07-03T09:00:00.000Z' },
+    // current month — employee submitted, awaiting reviews
+    { id: 'mr-maya-7', workerId: 'w-maya', month: '2026-07', stage: 'employee_submitted', selfRating: 4, selfComment: 'On track with Q3 roadmap.', selfSubmittedAt: SEED_DATE },
+    // Rajesh — bonus-eligible finalized (managers rated above self)
+    { id: 'mr-rajesh-6', workerId: 'w-rajesh', month: '2026-06', stage: 'finalized', selfRating: 3, selfComment: 'Steady progress.', selfSubmittedAt: '2026-06-30T09:00:00.000Z', tlRating: 4, tlFeedback: 'Underrates himself — great work.', tlBy: 'Mei Lin', tlAt: '2026-07-02T09:00:00.000Z', hrRating: 4, hrFeedback: 'Reliable contributor.', hrBy: 'Priya Nair', hrAt: '2026-07-03T09:00:00.000Z', finalizedAt: '2026-07-03T09:00:00.000Z' },
+    // Neha — team-lead review done, awaiting HR
+    { id: 'mr-neha-7', workerId: 'w-neha', month: '2026-07', stage: 'team_lead_review', selfRating: 4, selfComment: 'Closed two big deals.', selfSubmittedAt: SEED_DATE, tlRating: 5, tlFeedback: 'Outstanding quarter.', tlBy: 'Ravi Shah', tlAt: SEED_DATE },
+  ]
+  return { workers, notifications, activity, leaveRequests, holidays, orgUnits, auditLog, monthlyReviews }
 }
 
 /* ---------------- reducer ---------------- */
-interface State { workers: Worker[]; notifications: Notification[]; activity: Activity[]; leaveRequests: LeaveRequest[]; holidays: Holiday[]; orgUnits: OrgUnit[]; auditLog: AuditEntry[] }
+interface State { workers: Worker[]; notifications: Notification[]; activity: Activity[]; leaveRequests: LeaveRequest[]; holidays: Holiday[]; orgUnits: OrgUnit[]; auditLog: AuditEntry[]; monthlyReviews: MonthlyReview[] }
 
 export type NewWorkerInput = Omit<Worker, 'id' | 'token' | 'name' | 'createdAt' | 'expiresAt' | 'stage' | 'accountCreated' | 'documents' | 'goals' | 'notes' | 'attendance' | 'timeSessions' | 'projects' | 'reviews' | 'feedback'>
 
@@ -833,6 +892,13 @@ type Action =
   | { type: 'SET_MANAGER'; workerId: string; reportsToId?: string; actor: string }
   | { type: 'SET_ORG_ROLE'; workerId: string; orgRole: OrgRole; actor: string }
   | { type: 'SET_DESIGNATION'; workerId: string; designation: string; actor: string }
+  // Monthly performance review workflow
+  | { type: 'SUBMIT_SELF_REVIEW'; workerId: string; month: string; rating: number; comment: string }
+  | { type: 'TL_REVIEW'; reviewId: string; rating: number; feedback: string; by: string }
+  | { type: 'HR_REVIEW'; reviewId: string; rating: number; feedback: string; by: string }
+  | { type: 'FINALIZE_REVIEW'; reviewId: string; by: string }
+  | { type: 'APPROVE_BONUS'; reviewId: string; by: string }
+  | { type: 'SEND_REVIEW_FORM'; reviewId: string; by: string }
 
 function pushNotif(s: State, n: Omit<Notification, 'id' | 'read' | 'createdAt'>): Notification[] {
   return [{ id: uid(), read: false, createdAt: now(), ...n }, ...s.notifications]
@@ -1237,13 +1303,70 @@ function reducer(state: State, action: Action): State {
       }
     }
 
+    /* ---------- monthly performance reviews ---------- */
+    case 'SUBMIT_SELF_REVIEW': {
+      const existing = state.monthlyReviews.find(r => r.workerId === action.workerId && r.month === action.month)
+      const w = state.workers.find(x => x.id === action.workerId)
+      const patch = { selfRating: action.rating, selfComment: action.comment, selfSubmittedAt: now(), stage: 'employee_submitted' as ReviewStage }
+      const reviews = existing
+        ? state.monthlyReviews.map(r => r.id === existing.id ? { ...r, ...patch } : r)
+        : [{ id: uid(), workerId: action.workerId, month: action.month, ...patch }, ...state.monthlyReviews]
+      return {
+        ...state,
+        monthlyReviews: reviews,
+        notifications: pushNotif(state, { workerId: action.workerId, title: 'Monthly review submitted', message: `${w?.name || 'An employee'} submitted the ${monthLabel(action.month)} self-review.`, kind: 'info' }),
+        activity: pushActivity(state, `${w?.name || 'Employee'} submitted ${monthLabel(action.month)} self-review`, '#162660'),
+      }
+    }
+    case 'TL_REVIEW': {
+      return {
+        ...state,
+        monthlyReviews: state.monthlyReviews.map(r => r.id === action.reviewId
+          ? { ...r, tlRating: action.rating, tlFeedback: action.feedback, tlBy: action.by, tlAt: now(), stage: reviewStageIndex(r.stage) < reviewStageIndex('team_lead_review') ? 'team_lead_review' as ReviewStage : r.stage }
+          : r),
+      }
+    }
+    case 'HR_REVIEW': {
+      return {
+        ...state,
+        monthlyReviews: state.monthlyReviews.map(r => r.id === action.reviewId
+          ? { ...r, hrRating: action.rating, hrFeedback: action.feedback, hrBy: action.by, hrAt: now(), stage: reviewStageIndex(r.stage) < reviewStageIndex('hr_review') ? 'hr_review' as ReviewStage : r.stage }
+          : r),
+      }
+    }
+    case 'FINALIZE_REVIEW': {
+      const r0 = state.monthlyReviews.find(r => r.id === action.reviewId)
+      const w = r0 && state.workers.find(x => x.id === r0.workerId)
+      return {
+        ...state,
+        monthlyReviews: state.monthlyReviews.map(r => r.id === action.reviewId ? { ...r, stage: 'finalized' as ReviewStage, finalizedAt: now() } : r),
+        activity: pushActivity(state, `${w?.name || 'Employee'} ${r0 ? monthLabel(r0.month) : ''} review finalized`, '#0F7A46'),
+      }
+    }
+    case 'SEND_REVIEW_FORM': {
+      return {
+        ...state,
+        monthlyReviews: state.monthlyReviews.map(r => r.id === action.reviewId ? { ...r, formSentAt: r.formSentAt || now() } : r),
+      }
+    }
+    case 'APPROVE_BONUS': {
+      const r0 = state.monthlyReviews.find(r => r.id === action.reviewId)
+      const w = r0 && state.workers.find(x => x.id === r0.workerId)
+      return {
+        ...state,
+        monthlyReviews: state.monthlyReviews.map(r => r.id === action.reviewId ? { ...r, bonusApproved: true, bonusDecidedBy: action.by, bonusDecidedAt: now() } : r),
+        notifications: r0 ? pushNotif(state, { workerId: r0.workerId, title: 'Bonus approved', message: `Bonus approved for ${w?.name || 'employee'} (${monthLabel(r0.month)}).`, kind: 'success' }) : state.notifications,
+        activity: pushActivity(state, `Bonus approved for ${w?.name || 'employee'}`, '#F59E0B'),
+      }
+    }
+
     default:
       return state
   }
 }
 
 /* ---------------- context ---------------- */
-const KEY = 'wop-store-v3' // bumped: org structure + access control (v2 sessions re-seed)
+const KEY = 'wop-store-v4' // bumped: monthly performance reviews (v3 sessions re-seed)
 interface Ctx extends State {
   createWorker: (p: NewWorkerInput, docs?: WorkerDoc[]) => Worker
   uploadDoc: (workerId: string, docKey: string, fileName: string) => void
@@ -1263,6 +1386,12 @@ interface Ctx extends State {
   clockOut: (workerId: string, meta?: PunchMeta) => void
   addReview: (workerId: string, period: ReviewPeriod, rating: number, feedback: string, reviewer: string) => void
   addFeedback: (workerId: string, text: string, author: string) => void
+  submitSelfReview: (workerId: string, month: string, rating: number, comment: string) => void
+  teamLeadReview: (reviewId: string, rating: number, feedback: string, by: string) => void
+  hrReview: (reviewId: string, rating: number, feedback: string, by: string) => void
+  finalizeReview: (reviewId: string, by: string) => void
+  approveBonus: (reviewId: string, by: string) => void
+  sendReviewForm: (reviewId: string, by: string) => void
   applyLeave: (req: Omit<LeaveRequest, 'id' | 'status' | 'createdAt'>) => void
   decideLeave: (id: string, decision: 'approved' | 'rejected', decidedBy: string) => void
   addHoliday: (date: string, name: string) => void
@@ -1320,6 +1449,7 @@ function normalize(s: unknown): State {
     holidays: ((st as { holidays?: Holiday[] }).holidays) || [],
     orgUnits,
     auditLog: ((st as { auditLog?: AuditEntry[] }).auditLog) || [],
+    monthlyReviews: ((st as { monthlyReviews?: MonthlyReview[] }).monthlyReviews) || [],
   }
 }
 
@@ -1335,8 +1465,11 @@ export function WorkforceProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // persist on change
+  // persist on change — but skip the initial render so the fresh seed never overwrites
+  // persisted data before hydration runs (also safe under StrictMode double-mount).
+  const skipFirstPersist = useRef(true)
   useEffect(() => {
+    if (skipFirstPersist.current) { skipFirstPersist.current = false; return }
     try { localStorage.setItem(KEY, JSON.stringify(state)) } catch { /* ignore */ }
   }, [state])
 
@@ -1371,6 +1504,12 @@ export function WorkforceProvider({ children }: { children: React.ReactNode }) {
     clockOut: (workerId, meta) => dispatch({ type: 'CLOCK_OUT', workerId, meta }),
     addReview: (workerId, period, rating, feedback, reviewer) => dispatch({ type: 'ADD_REVIEW', workerId, period, rating, feedback, reviewer }),
     addFeedback: (workerId, text, author) => dispatch({ type: 'ADD_FEEDBACK', workerId, text, author }),
+    submitSelfReview: (workerId, month, rating, comment) => dispatch({ type: 'SUBMIT_SELF_REVIEW', workerId, month, rating, comment }),
+    teamLeadReview: (reviewId, rating, feedback, by) => dispatch({ type: 'TL_REVIEW', reviewId, rating, feedback, by }),
+    hrReview: (reviewId, rating, feedback, by) => dispatch({ type: 'HR_REVIEW', reviewId, rating, feedback, by }),
+    finalizeReview: (reviewId, by) => dispatch({ type: 'FINALIZE_REVIEW', reviewId, by }),
+    approveBonus: (reviewId, by) => dispatch({ type: 'APPROVE_BONUS', reviewId, by }),
+    sendReviewForm: (reviewId, by) => dispatch({ type: 'SEND_REVIEW_FORM', reviewId, by }),
     applyLeave: req => dispatch({ type: 'APPLY_LEAVE', req: { ...req, id: uid(), status: 'pending', createdAt: now() } }),
     decideLeave: (id, decision, decidedBy) => dispatch({ type: 'DECIDE_LEAVE', id, decision, decidedBy }),
     addHoliday: (date, name) => dispatch({ type: 'ADD_HOLIDAY', date, name }),
@@ -1573,7 +1712,9 @@ export interface Performance {
   attendanceRate: number // % present, over last 30 marked days
   goalRate: number // % of goals completed
   hoursRate: number // avg daily hours vs an 8h target, capped 100
-  reviewRate: number // latest manager review rating as %
+  reviewRate: number // avg of all submitted review ratings this year, as %
+  reviewAvg: number  // avg rating this year (0–5)
+  reviewCount: number // how many ratings averaged
   hasReview: boolean
   daysMarked: number
   daysWorked: number
@@ -1621,7 +1762,7 @@ export function experienceDuration(dateOfJoining: string, today = todayStr()): s
  *  hours) are configurable in Settings. Metrics with no data are excluded and the
  *  remaining weights renormalized, so a worker isn't penalized for a dimension
  *  that simply hasn't been recorded. */
-export function computePerformance(w: Worker): Performance {
+export function computePerformance(w: Worker, monthlyReviews: MonthlyReview[] = []): Performance {
   const last30 = lastNDays(30)
 
   // attendance
@@ -1640,9 +1781,16 @@ export function computePerformance(w: Worker): Performance {
   const avgDailyHours = workedDays.length ? Math.round((totalHours / workedDays.length) * 10) / 10 : 0
   const hoursRate = workedDays.length ? Math.min(100, Math.round((avgDailyHours / 8) * 100)) : 0
 
-  // reviews — most recent manager rating (1–5) as a %
-  const hasReview = w.reviews.length > 0
-  const reviewRate = hasReview ? Math.round((w.reviews[0].rating / 5) * 100) : 0
+  // reviews — average of ALL ratings submitted this calendar year across monthly reviews (self, TL, HR)
+  const year = todayStr().slice(0, 4)
+  const ratings: number[] = []
+  monthlyReviews.filter(r => r.workerId === w.id && r.month.startsWith(year)).forEach(r => {
+    ;[r.selfRating, r.tlRating, r.hrRating].forEach(v => { if (v != null) ratings.push(v) })
+  })
+  const reviewCount = ratings.length
+  const hasReview = reviewCount > 0
+  const reviewAvg = hasReview ? ratings.reduce((s, v) => s + v, 0) / reviewCount : 0
+  const reviewRate = hasReview ? Math.round((reviewAvg / 5) * 100) : 0
 
   // weighted, renormalized over metrics that have data
   const wt = getPerfWeights()
@@ -1654,7 +1802,7 @@ export function computePerformance(w: Worker): Performance {
   const wsum = parts.reduce((s, [, k]) => s + k, 0)
   const score = wsum ? Math.round(parts.reduce((s, [v, k]) => s + v * k, 0) / wsum) : 0
 
-  return { attendanceRate, goalRate, hoursRate, reviewRate, hasReview, daysMarked: recent.length, daysWorked: workedDays.length, goalsTotal, avgDailyHours, score }
+  return { attendanceRate, goalRate, hoursRate, reviewRate, reviewAvg, reviewCount, hasReview, daysMarked: recent.length, daysWorked: workedDays.length, goalsTotal, avgDailyHours, score }
 }
 
 /* ---------- Performance trend (recent 7 days vs the prior 7) ---------- */
