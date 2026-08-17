@@ -32,7 +32,7 @@ export default function ReportsPage() {
     const rows = [
       ['Name', 'Type', 'Department', 'Designation', 'HR Lead', 'Team Leads', 'Status', 'Location', 'Stage', 'Docs Verified', 'Account'],
       ...workers.map(w => [
-        w.name, w.type, w.department, w.designation, w.hrLead, w.teamLeads.join('; '), w.status, w.location, STAGE_META[w.stage].label,
+        w.name, w.type, w.department, w.designation, w.hrLead, w.teamLeadIds.map(id => workers.find(x => x.id === id)?.name || id).join('; '), w.status, w.location, STAGE_META[w.stage].label,
         `${w.documents.filter(d => d.status === 'approved').length}/${w.documents.length}`,
         w.accountCreated ? 'Yes' : 'No',
       ]),

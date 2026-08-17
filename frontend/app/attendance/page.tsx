@@ -218,6 +218,31 @@ function TeamAttendance() {
 
   const markedCount = list.filter(w => w.attendance.some(a => a.date === markDate)).length
 
+  // Day tally for the summary cards. Counts follow the visible list, so applying a
+  // filter or a search narrows the cards along with the table.
+  const tally = useMemo(() => {
+    const t = { present: 0, absent: 0, paid: 0, unpaid: 0, unmarked: 0 }
+    list.forEach(w => {
+      const rec = w.attendance.find(a => a.date === markDate)
+      if (!rec) { t.unmarked++; return }
+      if (rec.status === 'present') t.present++
+      else if (rec.status === 'absent') t.absent++
+      // a leave record only carries a type when one was chosen; Paid Leave is the
+      // default in the marking UI, so an untyped leave counts as paid
+      else if (rec.leaveType === 'Unpaid Leave') t.unpaid++
+      else t.paid++
+    })
+    return t
+  }, [list, markDate])
+
+  const TALLY_CARDS: { label: string; value: number; color: string }[] = [
+    { label: 'Present', value: tally.present, color: ATTENDANCE_META.present.color },
+    { label: 'Absent', value: tally.absent, color: ATTENDANCE_META.absent.color },
+    { label: 'Paid Leave', value: tally.paid, color: '#B45309' },
+    { label: 'Unpaid Leave', value: tally.unpaid, color: '#475569' },
+    { label: 'Not marked', value: tally.unmarked, color: '#94A3B8' },
+  ]
+
   const updateDay = () => {
     setSaved(true)
     setTimeout(() => setSaved(false), 2500)
@@ -261,6 +286,16 @@ function TeamAttendance() {
         </header>
 
         <main className="px-8 py-7 space-y-4">
+          {/* Day summary */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            {TALLY_CARDS.map(c => (
+              <div key={c.label} className="bg-white rounded-2xl border border-brand-gray p-4">
+                <p className="text-2xl font-bold" style={{ color: c.color }}>{c.value}</p>
+                <p className="text-xs text-brand-slate-gray">{c.label}</p>
+              </div>
+            ))}
+          </div>
+
           {/* Search + filters */}
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2 flex-1 min-w-[240px]">

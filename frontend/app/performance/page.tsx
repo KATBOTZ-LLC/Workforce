@@ -13,7 +13,11 @@ import { useQueryParam } from '@/app/lib/useQueryParam'
 
 export const dynamic = 'force-dynamic'
 
-const LEADS = ['Ananya Rao', 'Ravi Shah', 'Priya Nair', 'Karan Singh']
+/** Display name of a worker's first team lead, resolved from ids. */
+function tlName(w: Worker, all: Worker[]) {
+  const id = w.teamLeadIds[0]
+  return id ? all.find(x => x.id === id)?.name || '' : ''
+}
 
 export default function PerformancePage() {
   const role = useQueryParam('role')
@@ -105,7 +109,8 @@ function FeedbackList({ notes }: { notes: FeedbackNote[] }) {
 
 /* ================= Monthly performance review workflow ================= */
 const PERF_FORM_KEY = 'wop-perf-form-url'
-const DEFAULT_FORM_URL = 'https://docs.google.com/forms/d/1XQb1uDd_cD_xLgMZTZ931nhBAdizwX80_R5m_i3dxu4/viewform?edit_requested=true'
+// Responder (/viewform) link, not the /edit authoring link — employees only need to fill it in.
+const DEFAULT_FORM_URL = 'https://docs.google.com/forms/d/1saMU4qv2NfBgLdIpxOa9v9c6TRVFX-1vo0-Vl0DwWR4/viewform'
 function useFormUrl() {
   const [url, setUrl] = useState(DEFAULT_FORM_URL)
   useEffect(() => { try { setUrl(localStorage.getItem(PERF_FORM_KEY) || DEFAULT_FORM_URL) } catch { /* ignore */ } }, [])
@@ -195,7 +200,7 @@ function ReviewTrend({ reviews }: { reviews: MonthlyReview[] }) {
 
 /** One month's review — display for everyone; TL/HR action forms shown only when admin. */
 function MonthlyReviewCard({ review, worker, admin }: { review: MonthlyReview; worker: Worker; admin: boolean }) {
-  const { teamLeadReview, hrReview, finalizeReview, approveBonus } = useWorkforce()
+  const { workers, teamLeadReview, hrReview, finalizeReview, approveBonus } = useWorkforce()
   const formUrl = useFormUrl()
   const [tlRating, setTlRating] = useState(review.tlRating || 4)
   const [tlFeedback, setTlFeedback] = useState('')
@@ -236,12 +241,12 @@ function MonthlyReviewCard({ review, worker, admin }: { review: MonthlyReview; w
           {review.tlRating == null && (
             <div className="p-3 rounded-xl bg-brand-off-white space-y-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <span className="text-xs font-semibold text-brand-charcoal">Team Lead review — {worker.teamLeads[0] || 'Team Lead'}</span>
+                <span className="text-xs font-semibold text-brand-charcoal">Team Lead review — {tlName(worker, workers) || 'Team Lead'}</span>
                 <StarInput value={tlRating} onChange={setTlRating} size={5} />
               </div>
               <textarea value={tlFeedback} onChange={e => setTlFeedback(e.target.value)} rows={2} placeholder="Team lead feedback…" className="w-full text-sm" />
               <div className="flex justify-end">
-                <button onClick={() => teamLeadReview(review.id, tlRating, tlFeedback.trim(), worker.teamLeads[0] || 'Team Lead')} className="btn-primary text-sm">Submit Team Lead Review</button>
+                <button onClick={() => teamLeadReview(review.id, tlRating, tlFeedback.trim(), tlName(worker, workers) || 'Team Lead')} className="btn-primary text-sm">Submit Team Lead Review</button>
               </div>
             </div>
           )}
@@ -451,7 +456,7 @@ function AdminPerformance() {
   const [selectedId, setSelectedId] = useState<string>(preselect || roster[0]?.id || '')
   const selected = workers.find(w => w.id === selectedId) || roster[0] || null
 
-  const [reviewer, setReviewer] = useState(LEADS[0])
+  const [reviewer, setReviewer] = useState(roster[0]?.name || '')
   const [note, setNote] = useState('')
 
   const submitNote = (e: React.FormEvent) => {

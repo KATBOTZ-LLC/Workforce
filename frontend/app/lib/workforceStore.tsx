@@ -217,7 +217,7 @@ export interface Worker {
   designation: string
   department: string
   hrLead: string                // exactly one HR lead per worker
-  teamLeads: string[]           // one or more team leads
+  teamLeadIds: string[]         // worker ids of one or more team leads (never display names)
   location: string
 
   // Org structure (source of truth for access) — see OrgUnit / OrgRole
@@ -513,7 +513,7 @@ export function docsFor(type: WorkerType, location?: string, contractorMode?: Co
 // Deterministic seed so server and client first render match (no hydration mismatch).
 const SEED_DATE = '2026-07-10T09:00:00.000Z'
 function seed(): State {
-  const mk = (o: Partial<Worker> & { id: string; token: string; firstName: string; lastName: string; type: WorkerType; stage: Stage }): Worker => {
+  const mk = (o: Partial<Worker> & { id: string; token: string; firstName: string; lastName: string; type: WorkerType; stage: Stage; teamLeads?: string[] }): Worker => {
     const name = `${o.firstName} ${o.lastName}`
     const slug = name.toLowerCase().replace(/\s+/g, '.')
     return {
@@ -526,7 +526,8 @@ function seed(): State {
       pincode: o.pincode || '400001', timezone: o.timezone || TIMEZONES[0],
       type: o.type, employmentType: o.employmentType || (o.type === 'Intern' ? 'Part-time' : o.type === 'Contractor' ? 'Contract' : 'Full-time'),
       designation: o.designation || o.type, department: o.department || 'Engineering',
-      hrLead: o.hrLead || 'Priya Nair', teamLeads: o.teamLeads || ['Ananya Rao'],
+      // seed authors team leads by name; resolveTeamLeads() below converts them to ids
+      hrLead: o.hrLead || 'Priya Nair', teamLeadIds: (o.teamLeads || []) as string[],
       location: o.location || 'India', status: o.status || 'active',
       dateOfJoining: o.dateOfJoining || SEED_DATE.slice(0, 10), dateOfExit: o.dateOfExit, workExperience: o.workExperience,
       createdAt: SEED_DATE, expiresAt: '2026-07-17T09:00:00.000Z',
@@ -825,11 +826,23 @@ function seed(): State {
   // founder sits at the company root
   const founder = workers.find(w => w.id === FOUNDER_ID)
   if (founder) { founder.orgRole = 'founder'; founder.unitId = rootUnit.id; founder.reportsToId = undefined }
-  // reporting lines: members → dept lead; dept lead → founder
-  activeWorkers.forEach(w => {
-    if (w.id === FOUNDER_ID) return
-    const u = deptUnits.find(x => x.name === w.department)
-    w.reportsToId = u && u.leadId && u.leadId !== w.id ? u.leadId : FOUNDER_ID
+  // Reporting lines are NOT inferred. Previously every worker was auto-assigned their
+  // department's most senior member as reportsToId, which fabricated a hierarchy that
+  // was never authored. An unknown manager stays undefined.
+  //
+  // Team leads are authored by name; resolve them to ids. A name matching nobody is
+  // recorded as unresolved rather than being repointed at a similar-looking person.
+  const byName = new Map(workers.map(w => [w.name, w.id]))
+  const unresolvedTeamLeadRefs: string[] = []
+  workers.forEach(w => {
+    w.teamLeadIds = w.teamLeadIds
+      .map(n => {
+        const id = byName.get(n)
+        if (id) return id
+        if (!unresolvedTeamLeadRefs.includes(n)) unresolvedTeamLeadRefs.push(n)
+        return ''
+      })
+      .filter(Boolean)
   })
   const auditLog: AuditEntry[] = []
   const monthlyReviews: MonthlyReview[] = [
@@ -843,11 +856,11 @@ function seed(): State {
     // Neha — team-lead review done, awaiting HR
     { id: 'mr-neha-7', workerId: 'w-neha', month: '2026-07', stage: 'team_lead_review', selfRating: 4, selfComment: 'Closed two big deals.', selfSubmittedAt: SEED_DATE, tlRating: 5, tlFeedback: 'Outstanding quarter.', tlBy: 'Ravi Shah', tlAt: SEED_DATE },
   ]
-  return { workers, notifications, activity, leaveRequests, holidays, orgUnits, auditLog, monthlyReviews }
+  return { workers, notifications, activity, leaveRequests, holidays, orgUnits, auditLog, monthlyReviews, unresolvedTeamLeadRefs }
 }
 
 /* ---------------- reducer ---------------- */
-interface State { workers: Worker[]; notifications: Notification[]; activity: Activity[]; leaveRequests: LeaveRequest[]; holidays: Holiday[]; orgUnits: OrgUnit[]; auditLog: AuditEntry[]; monthlyReviews: MonthlyReview[] }
+interface State { workers: Worker[]; notifications: Notification[]; activity: Activity[]; leaveRequests: LeaveRequest[]; holidays: Holiday[]; orgUnits: OrgUnit[]; auditLog: AuditEntry[]; monthlyReviews: MonthlyReview[]; unresolvedTeamLeadRefs: string[] }
 
 export type NewWorkerInput = Omit<Worker, 'id' | 'token' | 'name' | 'createdAt' | 'expiresAt' | 'stage' | 'accountCreated' | 'documents' | 'goals' | 'notes' | 'attendance' | 'timeSessions' | 'projects' | 'reviews' | 'feedback'>
 
@@ -1366,7 +1379,7 @@ function reducer(state: State, action: Action): State {
 }
 
 /* ---------------- context ---------------- */
-const KEY = 'wop-store-v4' // bumped: monthly performance reviews (v3 sessions re-seed)
+const KEY = 'wop-store-v5' // bumped: teamLeads names -> teamLeadIds, inferred reportsToId removed
 interface Ctx extends State {
   createWorker: (p: NewWorkerInput, docs?: WorkerDoc[]) => Worker
   uploadDoc: (workerId: string, docKey: string, fileName: string) => void
@@ -1435,7 +1448,7 @@ function normalize(s: unknown): State {
       projects: (w.projects as unknown[]) || [],
       reviews: (w.reviews as unknown[]) || [],
       feedback: (w.feedback as unknown[]) || [],
-      teamLeads: (w.teamLeads as unknown[]) || (w.teamLead ? [w.teamLead] : []),
+      teamLeadIds: (w.teamLeadIds as unknown[]) || [],
       name: (w.name as string) || `${(w.firstName as string) || ''} ${(w.lastName as string) || ''}`.trim(),
       orgRole: (w.orgRole as OrgRole) || defaultOrgRole(w as unknown as Worker),
     }
@@ -1450,6 +1463,7 @@ function normalize(s: unknown): State {
     orgUnits,
     auditLog: ((st as { auditLog?: AuditEntry[] }).auditLog) || [],
     monthlyReviews: ((st as { monthlyReviews?: MonthlyReview[] }).monthlyReviews) || [],
+    unresolvedTeamLeadRefs: ((st as { unresolvedTeamLeadRefs?: string[] }).unresolvedTeamLeadRefs) || [],
   }
 }
 

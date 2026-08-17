@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { WorkforceProvider } from './lib/workforceStore'
+import { OrgProvider } from './lib/orgStore'
 
 export const metadata: Metadata = {
   title: 'WOP - Workforce Operations Platform',
@@ -15,7 +16,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-brand-light-gray text-brand-navy">
-        <WorkforceProvider>{children}</WorkforceProvider>
+        <WorkforceProvider><OrgProvider>{children}</OrgProvider></WorkforceProvider>
       </body>
     </html>
   )

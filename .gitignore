@@ -68,3 +68,6 @@ temp/
 
 # archived corrupt git internals (never commit)
 .git-corrupt-*
+
+# TypeScript build cache
+*.tsbuildinfo

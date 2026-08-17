@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import Sidebar from '@/app/layout/Sidebar'
 import {
-  useWorkforce, STAGE_META, WorkerType, Gender, EmploymentType, EmployeeStatus,
+  useWorkforce, STAGE_META, Worker, WorkerType, Gender, EmploymentType, EmployeeStatus,
   TIMEZONES, ageFromDob, experienceDuration, fmtDate, computePerformance,
   lifecycleStage, LIFECYCLE_META, milestones, journeyEvents,
   ContractorMode, docRequirements,
@@ -17,7 +17,10 @@ const TYPES: WorkerType[] = ['Employee', 'Contractor', 'Intern']
 const EMPLOYMENT_TYPES: EmploymentType[] = ['Full-time', 'Part-time', 'Contract']
 const GENDERS: Gender[] = ['Male', 'Female', 'Other', 'Prefer not to say']
 const DEPARTMENTS = ['Engineering', 'Sales', 'HR', 'Social Media', 'Finance', "CEO's Office"]
-const LEADS = ['Ananya Rao', 'Ravi Shah', 'Priya Nair', 'Karan Singh']
+/** Team leads are picked from real worker records, never a hardcoded name list. */
+function leadNames(all: Worker[], ids: string[]) {
+  return ids.map(id => all.find(w => w.id === id)?.name || `⚠ ${id}`).join(', ')
+}
 const LOCATIONS = ['India', 'US']
 const COUNTRIES = ['India', 'United States', 'Other']
 
@@ -27,7 +30,7 @@ const EMPTY_FORM = {
   country: 'India', state: '', address: '', pincode: '', timezone: TIMEZONES[0],
   type: 'Employee' as WorkerType, contractorMode: 'independent' as ContractorMode,
   employmentType: 'Full-time' as EmploymentType, designation: '',
-  department: 'Engineering', hrLead: 'Priya Nair', teamLeads: ['Ananya Rao'] as string[],
+  department: 'Engineering', hrLead: 'Priya Nair', teamLeadIds: [] as string[],
   location: 'India', dateOfJoining: '', workExperience: '',
 }
 
@@ -265,7 +268,7 @@ export default function EmployeesPage() {
                   </Field>
                   <Field label="HR Lead">
                     <select value={form.hrLead} onChange={e => setForm({ ...form, hrLead: e.target.value })}>
-                      {LEADS.map(l => <option key={l}>{l}</option>)}
+                      {workers.filter(w => w.status === 'active').map(l => <option key={l.id}>{l.name}</option>)}
                     </select>
                   </Field>
                   <Field label="Location">
@@ -277,13 +280,13 @@ export default function EmployeesPage() {
                   <div className="md:col-span-2">
                     <span className="block text-sm font-medium text-brand-charcoal mb-1.5">Team Lead(s) — one or more</span>
                     <div className="flex flex-wrap gap-2">
-                      {LEADS.map(l => {
-                        const on = form.teamLeads.includes(l)
+                      {workers.filter(w => w.status === 'active').map(l => {
+                        const on = form.teamLeadIds.includes(l.id)
                         return (
-                          <button key={l} type="button"
-                            onClick={() => setForm({ ...form, teamLeads: on ? form.teamLeads.filter(x => x !== l) : [...form.teamLeads, l] })}
+                          <button key={l.id} type="button"
+                            onClick={() => setForm({ ...form, teamLeadIds: on ? form.teamLeadIds.filter(x => x !== l.id) : [...form.teamLeadIds, l.id] })}
                             className={`px-3 py-1.5 rounded-full text-xs font-semibold transition border ${on ? 'bg-brand-royal-blue text-white border-brand-royal-blue' : 'bg-white text-brand-charcoal border-brand-gray hover:bg-brand-off-white'}`}>
-                            {l}
+                            {l.name}
                           </button>
                         )
                       })}
@@ -411,7 +414,7 @@ export default function EmployeesPage() {
                   <div className="mt-4 space-y-1 text-sm text-brand-slate-gray">
                     <p>{w.accountCreated ? w.professionalEmail : w.personalEmail}</p>
                     <p className="text-xs">{w.phone ? `${w.phone} · ` : ''}{w.location}</p>
-                    <p className="text-xs">HR: {w.hrLead} · Team: {w.teamLeads.join(', ')}</p>
+                    <p className="text-xs">HR: {w.hrLead} · Team: {leadNames(workers, w.teamLeadIds)}</p>
                     <p className="text-xs">
                       {w.type} · {w.employmentType} · Joined {fmtDate(w.dateOfJoining)} ({experienceDuration(w.dateOfJoining)})
                       {age !== null && ` · Age ${age}`}
@@ -493,13 +496,13 @@ type PreviewWorker = import('@/app/lib/workforceStore').Worker
 type Draft = Pick<PreviewWorker,
   'firstName' | 'lastName' | 'gender' | 'dob' | 'about' | 'personalEmail' | 'professionalEmail' | 'phone' |
   'address' | 'state' | 'country' | 'pincode' | 'timezone' | 'type' | 'employmentType' | 'designation' |
-  'department' | 'hrLead' | 'teamLeads' | 'location' | 'dateOfJoining' | 'workExperience'>
+  'department' | 'hrLead' | 'teamLeadIds' | 'location' | 'dateOfJoining' | 'workExperience'>
 
 function WorkerPreview({ worker: w, onClose }: {
   worker: PreviewWorker
   onClose: () => void
 }) {
-  const { updateWorker, leaveRequests, monthlyReviews } = useWorkforce()
+  const { workers, updateWorker, leaveRequests, monthlyReviews } = useWorkforce()
   const approved = w.documents.filter(d => d.status === 'approved').length
   const age = ageFromDob(w.dob)
   const meta = STAGE_META[w.stage]
@@ -645,17 +648,17 @@ function WorkerPreview({ worker: w, onClose }: {
                   <select value={draft.department} onChange={e => set('department', e.target.value)}>{DEPARTMENTS.map(d => <option key={d}>{d}</option>)}</select>
                 </ERow>
                 <ERow label="HR lead">
-                  <select value={draft.hrLead} onChange={e => set('hrLead', e.target.value)}>{LEADS.map(l => <option key={l}>{l}</option>)}</select>
+                  <select value={draft.hrLead} onChange={e => set('hrLead', e.target.value)}>{workers.filter(w => w.status === 'active').map(l => <option key={l.id}>{l.name}</option>)}</select>
                 </ERow>
                 <ERow label="Team lead(s)">
                   <div className="flex flex-wrap gap-1.5 justify-end">
-                    {LEADS.map(l => {
-                      const on = draft.teamLeads.includes(l)
+                    {workers.filter(w => w.status === 'active').map(l => {
+                      const on = draft.teamLeadIds.includes(l.id)
                       return (
-                        <button key={l} type="button"
-                          onClick={() => set('teamLeads', on ? draft.teamLeads.filter(x => x !== l) : [...draft.teamLeads, l])}
+                        <button key={l.id} type="button"
+                          onClick={() => set('teamLeadIds', on ? draft.teamLeadIds.filter(x => x !== l.id) : [...draft.teamLeadIds, l.id])}
                           className={`px-2 py-1 rounded-full text-[11px] font-semibold transition border ${on ? 'bg-brand-royal-blue text-white border-brand-royal-blue' : 'bg-white text-brand-charcoal border-brand-gray'}`}>
-                          {l}
+                          {l.name}
                         </button>
                       )
                     })}
@@ -674,7 +677,7 @@ function WorkerPreview({ worker: w, onClose }: {
                 <Row label="Designation" value={w.designation} />
                 <Row label="Department" value={w.department} />
                 <Row label="HR lead" value={w.hrLead} />
-                <Row label="Team lead(s)" value={w.teamLeads.join(', ') || '—'} />
+                <Row label="Team lead(s)" value={leadNames(workers, w.teamLeadIds) || '—'} />
                 <Row label="Location" value={w.location} />
                 <Row label="Date of joining" value={fmtDate(w.dateOfJoining)} />
                 <Row label="Current experience" value={experienceDuration(w.dateOfJoining)} />
@@ -807,7 +810,7 @@ function pickDraft(w: PreviewWorker): Draft {
     personalEmail: w.personalEmail, professionalEmail: w.professionalEmail, phone: w.phone,
     address: w.address, state: w.state, country: w.country, pincode: w.pincode, timezone: w.timezone,
     type: w.type, employmentType: w.employmentType, designation: w.designation, department: w.department,
-    hrLead: w.hrLead, teamLeads: [...w.teamLeads], location: w.location, dateOfJoining: w.dateOfJoining,
+    hrLead: w.hrLead, teamLeadIds: [...w.teamLeadIds], location: w.location, dateOfJoining: w.dateOfJoining,
     workExperience: w.workExperience,
   }
 }
