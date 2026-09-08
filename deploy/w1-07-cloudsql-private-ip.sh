@@ -5,9 +5,18 @@
 # connects. Stop it between demos:
 #   gcloud sql instances patch wf-postgres --activation-policy=NEVER
 #
-# Private IP means no public address exists at all. Nothing on the internet can
-# reach the database, including you — local access goes through the Auth Proxy
-# (W1-08) and Cloud Run goes through the VPC connector (W1-10).
+# The instance gets BOTH interfaces, deliberately:
+#
+#   * a PRIVATE IP, which is what Cloud Run uses (W1-10). Production traffic
+#     never leaves the VPC.
+#   * a PUBLIC interface with NO authorized networks, which is what makes the
+#     Auth Proxy work from a laptop (W1-08). With no authorized networks every
+#     direct connection is refused; the only way in is the proxy, authenticated
+#     by your Google IAM identity over TLS.
+#
+# This is how W1-07 and W1-08 are both satisfied. A private-only instance is
+# unreachable from a laptop even through the proxy, so "private IP" alone would
+# have made local development impossible. See deploy/README.md.
 set -euo pipefail
 . "$(dirname "$0")/config.sh"; require
 
@@ -47,7 +56,7 @@ else
     --region="$REGION" \
     --storage-size=10GB --storage-type=SSD --storage-auto-increase \
     --network="$NETWORK_URI" \
-    --no-assign-ip \
+    --assign-ip \
     --backup --backup-start-time=19:00 \
     --maintenance-window-day=SUN --maintenance-window-hour=20 \
     --database-flags=cloudsql.iam_authentication=on
@@ -73,7 +82,12 @@ else
   echo "     created $DB_APP_USER; password is in Secret Manager as wf-db-password"
 fi
 
-PRIVATE_IP="$(gcloud sql instances describe "$SQL_INSTANCE" --format='value(ipAddresses[0].ipAddress)')"
+# Order is not guaranteed, so select by type rather than by index.
+PRIVATE_IP="$(gcloud sql instances describe "$SQL_INSTANCE" \
+  --format='value(ipAddresses.filter("type:PRIVATE").extract("ipAddress").flatten())')"
+# Belt and braces: no authorized networks, so the public interface is
+# proxy-only. Harmless if already empty.
+gcloud sql instances patch "$SQL_INSTANCE" --clear-authorized-networks --quiet >/dev/null 2>&1 || true
 CONN="$(gcloud sql instances describe "$SQL_INSTANCE" --format='value(connectionName)')"
 cat <<DONE
 

@@ -78,3 +78,20 @@ firestore-debug.log
 
 # demo.sh runtime state (pids, logs, generated passcode)
 .demo/
+
+# Locally stored uploaded documents (never commit these)
+.document-store/
+
+# Commercial and personal documents. THIS REPOSITORY IS PUBLIC — budgets,
+# rates, project plans and a contractor's invoice must not be published.
+# Keep them locally, or move them to a private location.
+Workforce - Final Budget & Project Plan*.xlsx
+Workforce Project Tracker*.xlsx
+Workforce GANTT Chart*.xlsx
+Workforce Platform.docx
+Independent_Contractor_Invoice*.docx
+Independent_Contractor_Invoice*.pdf
+
+# Word/Excel lock files
+~$*
+.DS_Store

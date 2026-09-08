@@ -17,6 +17,10 @@ export default function Sidebar() {
     { icon: '', label: 'Employees', href: '/employees?role=admin' },
     { icon: '', label: 'Organization', href: '/organization?role=admin' },
     { icon: '', label: 'Onboarding & Docs', href: '/documents?role=admin' },
+    // Reads PostgreSQL through the API. The pages above still use the browser
+    // store; these two are the migrated ones.
+    { icon: '', label: 'HR Verification', href: '/verify' },
+    { icon: '', label: 'Live Database', href: '/live' },
     { icon: '', label: 'Tasks', href: '/tasks?role=admin' },
     { icon: '', label: 'Attendance', href: '/attendance?role=admin' },
     { icon: '', label: 'Leave', href: '/leave?role=admin' },

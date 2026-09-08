@@ -1,5 +1,53 @@
 # Deploying to Google Cloud — W1-06 to W1-13
 
+## Project: `katbotz-hr-and-vendor-portal`, NOT `workforce-503018`
+
+`workforce-503018` has no billing account and this account cannot link one.
+`katbotz-hr-and-vendor-portal` already has billing
+(`billingAccounts/017391-1C00E4-16772C`) and `aayushi111@katbotz.com` holds
+`roles/editor` there. `deploy/config.sh` defaults to it.
+
+That is a real company billing account, not trial credit.
+
+## What roles/editor cannot do here, and what was done instead
+
+Editor is enough for most of this, but three things are denied. Each has a
+working substitute, and each substitute is a real deviation worth knowing about.
+
+| Denied permission | Consequence | What was done instead |
+|---|---|---|
+| `servicenetworking.services.addPeering` | **Cloud SQL private IP is impossible** | Public interface with **no authorized networks**, so every direct connection is refused and the IAM-authenticated Auth Proxy is the only route in. Cloud Run uses the platform's built-in proxy (`--add-cloudsql-instances`) — no VPC, no connector, nothing extra billed. **W1-10 is therefore satisfied by configuration and costs $0.** |
+| `secretmanager.versions.access` | Secrets can be created but never read | `DATABASE_URL` / `SESSION_SECRET` are set as Cloud Run env vars |
+| `secretmanager.secrets.setIamPolicy` | Cloud Run cannot be granted secret access either | same |
+
+Env vars are weaker than Secret Manager: anyone with project Viewer can read
+them with `gcloud run services describe`. Everyone who can see this project
+already has Editor, so the practical gap is small — but it is a gap. One IAM
+grant closes it:
+
+```bash
+gcloud projects add-iam-policy-binding katbotz-hr-and-vendor-portal \
+  --member=user:aayushi111@katbotz.com --role=roles/secretmanager.admin
+```
+
+Then switch the two `--set-env-vars` in `w1-12-deploy.sh` back to `--set-secrets`.
+
+## Three things that will bite anyone repeating this
+
+1. **`--edition=ENTERPRISE` is mandatory.** This organisation defaults new
+   Cloud SQL instances to Enterprise Plus, whose smallest tier is
+   `db-perf-optimized-N-2` — several times the cost — and which rejects
+   `db-f1-micro` outright.
+2. **`cloud-sql-proxy` needs `--token "$(gcloud auth print-access-token)"`.**
+   Application Default Credentials are not configured, and
+   `gcloud auth application-default login` needs a browser.
+3. **`concat_ws` cannot be used in an index expression.** It is only STABLE.
+   Cloud SQL refuses it; local PostgreSQL accepted it, which is how it got in.
+   The trigram index and the query in `backend/app/directory.py` both use
+   `coalesce(a,'') || ' ' || coalesce(b,'')` and must stay byte-identical, or
+   the planner silently stops using the index.
+
+
 One script per work item. Each prints what it will create and asks before
 anything billable.
 

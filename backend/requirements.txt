@@ -8,3 +8,5 @@ python-dotenv==1.0.1
 sqlalchemy==2.0.52
 psycopg[binary]==3.3.5
 email-validator==2.3.0
+python-multipart==0.0.32
+google-cloud-storage==2.18.2

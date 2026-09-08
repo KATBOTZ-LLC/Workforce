@@ -1,6 +1,15 @@
 # Shared settings for the W1-06 .. W1-13 scripts. Edit this file, nothing else.
 
-export PROJECT_ID="${PROJECT_ID:-workforce-503018}"
+# katbotz-hr-and-vendor-portal, NOT workforce-503018.
+#
+# workforce-503018 has no billing account and nobody on this account can link
+# one. katbotz-hr-and-vendor-portal already has billing
+# (billingAccounts/017391-1C00E4-16772C) and aayushi111@katbotz.com holds
+# roles/editor there, which covers every step from W1-06 to W1-12.
+#
+# That billing account is REAL SPEND, not trial credit. W1-07 and W1-10 commit
+# roughly $18-25/month to it. Confirm that is authorised before running them.
+export PROJECT_ID="${PROJECT_ID:-katbotz-hr-and-vendor-portal}"
 export REGION="${REGION:-asia-south1}"
 
 # --- W1-07 Cloud SQL (private IP) -----------------------------------------
@@ -14,9 +23,10 @@ export SQL_TIER="${SQL_TIER:-db-f1-micro}"
 # either the Auth Proxy (local dev, W1-08) or a VPC connector (Cloud Run, W1-10).
 export NETWORK="${NETWORK:-default}"
 export PEERING_RANGE="${PEERING_RANGE:-google-managed-services-$NETWORK}"
-export CONNECTOR="${CONNECTOR:-wf-connector}"
-# Must not overlap anything already in the VPC. /28 is the minimum a connector takes.
-export CONNECTOR_RANGE="${CONNECTOR_RANGE:-10.8.0.0/28}"
+# Cloud Run uses Direct VPC egress rather than a Serverless VPC Access
+# connector — same result, no always-on instances to pay for. See
+# deploy/w1-10-vpc-connector.sh for why.
+export SUBNET="${SUBNET:-default}"
 
 # --- W1-06 Cloud Storage ---------------------------------------------------
 # Holds uploaded documents. DOCUMENT_FILE.file_storage_key is the object name,

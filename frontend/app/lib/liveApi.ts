@@ -179,3 +179,79 @@ export async function createWorker(input: NewWorker): Promise<CreatedWorker> {
   }
   return res.json()
 }
+
+// ---------------------------------------------------------------------------
+// Roster, checklists and verification (backend/app/employees.py, documents.py)
+// ---------------------------------------------------------------------------
+
+
+export interface ChecklistItem {
+  document_id: string
+  document_name: string
+  is_mandatory: boolean
+  status: string
+  reference_url: string | null
+  expiry_date: string | null
+  current_file_id: string | null
+  current_file_name: string | null
+  review_status: string | null
+  rejection_reason: string | null
+  scan_state: string | null
+  version_count: number
+}
+
+export interface Checklist {
+  employment_id: string
+  employment_code: string
+  display_name: string
+  worker_type: string
+  region: string | null
+  stage: string
+  items: ChecklistItem[]
+  mandatory_outstanding: number
+  can_activate: boolean
+}
+
+async function send<T>(path: string, init: RequestInit): Promise<T> {
+  const token = getSessionToken()
+  if (!token) throw new ApiError(401, 'Not signed in')
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) {
+    let detail = res.statusText
+    try { detail = (await res.json()).detail || detail } catch { /* keep statusText */ }
+    throw new ApiError(res.status, detail)
+  }
+  return res.status === 204 ? (null as T) : res.json()
+}
+
+export const fetchChecklistFor = (employmentId: string) =>
+  authed<Checklist>(`/api/documents/checklist/${employmentId}`)
+
+/** Approve or reject one FILE VERSION, not the checklist item. A change of mind
+ * is a new upload, so both decisions stay on record — the backend refuses a
+ * second review of the same version. */
+export const reviewFile = (fileId: string, decision: 'Approved' | 'Rejected', reason?: string) =>
+  send<{ mandatory_outstanding: number; can_activate: boolean }>(
+    `/api/documents/files/${fileId}/review`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, rejection_reason: reason || null }),
+    },
+  )
+
+export const activateEmployment = (employmentId: string) =>
+  send<{ employment_code: string; stage: string; message: string }>(
+    `/api/employees/${employmentId}/activate`, { method: 'POST' },
+  )
+
+/** HR uploading on a worker's behalf — for someone who emails their documents
+ * instead of using their link. */
+export async function uploadAsHr(documentId: string, file: File): Promise<void> {
+  const body = new FormData()
+  body.append('file', file)
+  await send(`/api/documents/${documentId}/upload`, { method: 'POST', body })
+}

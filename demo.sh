@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Start the whole platform for a demo. No Google Cloud, no billing.
 #
-#   ./demo.sh            local only — http://localhost:3000/live
-#   ./demo.sh --public   also opens a public URL other people can open
-#   ./demo.sh --stop     stop everything
+#   ./demo.sh                   local only — http://localhost:3000/live
+#   ./demo.sh --public          also opens a public URL other people can open
+#   ./demo.sh --with-demo-data  add four INVENTED engagements (avoid; prefer real)
+#   ./demo.sh --stop            stop everything
+#
+# By default this loads REAL data only: 34 real people, 12 real departments,
+# 50 real seats, 66 real document requirements, and ZERO engagements. Real
+# engagements come from db/import/import_roster.py.
 #
 # --public publishes this app, including 34 real names and email addresses, to a
 # URL anyone can reach. A passcode is generated and required, but the URL is
@@ -40,6 +45,7 @@ stop_all () {
 }
 
 [ "${1:-}" = "--stop" ] && { stop_all; exit 0; }
+[ "${1:-}" = "--with-demo-data" ] && WITH_DEMO=1
 
 echo "Stopping anything already running..."
 stop_all >/dev/null 2>&1 || true
@@ -48,7 +54,17 @@ stop_all >/dev/null 2>&1 || true
 echo
 echo "1/3  Database"
 pg_isready -q || { echo "  PostgreSQL is not running. Start it:  brew services start postgresql@17"; exit 1; }
-./db/migrate.sh --demo 2>&1 | sed -n '/tables/,$p' | sed 's/^/  /'
+# Real data only: the 34 real people, 12 real departments, 50 real seats and
+# the 66 real document requirements. NO invented engagements — those come from
+# db/import/import_roster.py once HR has confirmed types and join dates.
+# Pass --with-demo-data if you deliberately want the four fake engagements.
+if [ "${WITH_DEMO:-}" = "1" ]; then
+  ./db/migrate.sh --demo 2>&1 | sed -n '/tables/,$p' | sed 's/^/  /'
+else
+  ./db/migrate.sh 2>&1 | sed -n '/tables/,$p' | sed 's/^/  /'
+  ENG="$(psql -d "${WF_DB_NAME:-wf_dev}" -tAc 'SELECT count(*) FROM employment' 2>/dev/null || echo '?')"
+  echo "  engagements: $ENG  (real data only — import the roster to populate)"
+fi
 
 # --- 2. passcode ------------------------------------------------------------
 PASSCODE="$(python3 -c 'import secrets,string;print("katbotz-"+"".join(secrets.choice(string.ascii_lowercase+string.digits) for _ in range(6)))')"

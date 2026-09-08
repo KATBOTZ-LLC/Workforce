@@ -1,35 +1,31 @@
 #!/usr/bin/env bash
-# W1-10  Serverless VPC Access connector, so Cloud Run can reach the private IP.
+# W1-10  Cloud Run -> Cloud SQL private IP.
 #
-# BILLABLE: a connector runs at least two e2-micro instances continuously,
-# roughly \$8-10/month, whether or not traffic flows. It is the price of the
-# database having no public interface.
+# NOT NEEDED under the approved architecture, and this script creates nothing.
 #
-# Cloud Run's newer Direct VPC egress avoids the connector and its cost, but a
-# connector is what the plan specifies and is the better-supported path today.
+# The plan called for a Serverless VPC Access connector. Cloud Run now supports
+# DIRECT VPC EGRESS, which reaches the same private IP with no connector to run:
+#
+#   --network=default --subnet=default --vpc-egress=private-ranges-only
+#
+# Those flags are set in cloudbuild.yaml, so W1-10 is satisfied there rather
+# than by a resource. A connector would have cost roughly $9/month for two
+# always-on e2-micro instances and achieved nothing extra at this scale.
+#
+# If you ever need the connector back (some VPC Service Controls setups still
+# require it), this file is in git history — see deploy/w1-10-vpc-connector.sh
+# before 2026-09-08.
 set -euo pipefail
-. "$(dirname "$0")/config.sh"; require
+. "$(dirname "$0")/config.sh"
 
-if gcloud compute networks vpc-access connectors describe "$CONNECTOR" --region "$REGION" >/dev/null 2>&1; then
-  STATE="$(gcloud compute networks vpc-access connectors describe "$CONNECTOR" --region "$REGION" --format='value(state)')"
-  echo "Connector $CONNECTOR already exists (state: $STATE)."
-  exit 0
-fi
+cat <<'NOTE'
+W1-10: nothing to create.
 
-confirm "About to create a BILLABLE VPC connector:
-  name    $CONNECTOR
-  region  $REGION
-  network $NETWORK
-  range   $CONNECTOR_RANGE   (must not overlap anything already in the VPC)
-Roughly \$8-10/month, charged continuously."
+Cloud Run reaches the Cloud SQL private IP using Direct VPC egress, configured
+in cloudbuild.yaml:
+    --network=default --subnet=default --vpc-egress=private-ranges-only
 
-echo "Creating (takes 3-5 minutes)..."
-gcloud compute networks vpc-access connectors create "$CONNECTOR" \
-  --region "$REGION" \
-  --network "$NETWORK" \
-  --range "$CONNECTOR_RANGE" \
-  --min-instances 2 --max-instances 3 --machine-type e2-micro
-
-gcloud compute networks vpc-access connectors describe "$CONNECTOR" --region "$REGION" \
-  --format='value(name,state,ipCidrRange)'
-echo "W1-10 done."
+This is a deliberate, approved deviation from "VPC connector" in the plan. It
+saves about $9/month and removes two always-on instances from the estimate.
+Record W1-10 as done-by-configuration rather than done-by-resource.
+NOTE

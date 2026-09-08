@@ -7,6 +7,8 @@ from .config import settings
 from .dev_login import dev_login_enabled
 from .dev_login import router as dev_login_router
 from .directory import router as directory_router
+from .documents import public_router as onboarding_router
+from .documents import router as documents_router
 from .employees import router as employees_router
 from .me import router as me_router
 from .org import router as org_router
@@ -28,6 +30,8 @@ app.include_router(org_router)
 app.include_router(workers_router)
 app.include_router(directory_router)
 app.include_router(employees_router)
+app.include_router(documents_router)
+app.include_router(onboarding_router)
 
 # Registered only when explicitly enabled, so the route does not exist at all in
 # a normal deployment. See app/dev_login.py.

@@ -1,0 +1,9 @@
+# See backend/.gcloudignore. node_modules and .next are rebuilt inside the
+# image, so uploading them wastes minutes on every deploy.
+.gcloudignore
+node_modules/
+.next/
+.env.local
+.env.*.local
+tsconfig.tsbuildinfo
+.claude/

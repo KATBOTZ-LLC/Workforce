@@ -16,18 +16,20 @@ put_secret () {  # put_secret NAME VALUE
   fi
 }
 
-PRIVATE_IP="$(gcloud sql instances describe "$SQL_INSTANCE" --format='value(ipAddresses[0].ipAddress)')"
-[ -n "$PRIVATE_IP" ] || { echo "Could not read the instance's private IP. Run W1-07 first."; exit 1; }
+CONN="$(gcloud sql instances describe "$SQL_INSTANCE" --format='value(connectionName)' 2>/dev/null || true)"
+[ -n "$CONN" ] || { echo "Could not read the instance connection name. Run W1-07 first."; exit 1; }
 
 DB_PW="$(gcloud secrets versions access latest --secret=wf-db-password 2>/dev/null || true)"
 [ -n "$DB_PW" ] || { echo "wf-db-password is missing. Run W1-07 first."; exit 1; }
 
 echo "Writing secrets:"
 
-# Cloud Run reaches the PRIVATE address through the VPC connector, so the host
-# here is the private IP, not a Unix socket and not a public address.
+# Cloud Run reaches Cloud SQL over a Unix socket provided by the platform, so
+# there is no host and no port here — the socket path IS the address. This form
+# only works inside Cloud Run; local development uses the proxy on 127.0.0.1
+# instead (see W1-08).
 put_secret wf-database-url \
-  "postgresql+psycopg://$DB_APP_USER:$DB_PW@$PRIVATE_IP:5432/$DB_NAME"
+  "postgresql+psycopg://$DB_APP_USER:$DB_PW@/$DB_NAME?host=/cloudsql/$CONN"
 
 if ! gcloud secrets describe wf-session-secret >/dev/null 2>&1; then
   put_secret wf-session-secret "$(python3 -c 'import secrets;print(secrets.token_urlsafe(48),end="")')"

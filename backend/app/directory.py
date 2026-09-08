@@ -155,19 +155,26 @@ def headcount(email: str = Depends(get_current_user_email)) -> list[HeadcountRow
 def search(q: str = Query(min_length=2), email: str = Depends(get_current_user_email)) -> list[DirectoryEntryOut]:
     """Directory search that tolerates misspelling, via the trigram index.
 
-    concat_ws, not ||: last_name is nullable because the real org matrix contains
-    mononyms, and 'Akshat' || ' ' || NULL would be NULL — which would silently
-    drop every single-name person out of the results.
+    The expression below is written to match ix_person_name_trgm EXACTLY —
+    coalesce + ||, not concat_ws. concat_ws is only STABLE, so PostgreSQL will
+    not accept it in an index expression, and an expression that differs from
+    the index means the planner ignores the index and scans every row.
+
+    The coalesces are what keep mononyms searchable: last_name is nullable
+    because 20+ people in the real org matrix have one name, and
+    'Akshat' || ' ' || NULL is NULL.
     """
+    NAME_EXPR = ("(coalesce(first_name, '') || ' ' || coalesce(last_name, '')"
+                 " || ' ' || coalesce(preferred_name, ''))")
     profile = _profile(email)
     # similarity(...) >= threshold rather than the % operator: the threshold is
     # then explicit in the query instead of hidden in a session GUC, and there is
     # no percent-sign escaping to get wrong in the driver layer.
     matches = db.rows(
         "SELECT person_id,"
-        "       similarity(concat_ws(' ', first_name, last_name, preferred_name), :q) AS score"
+        f"       similarity({NAME_EXPR}, :q) AS score"
         "  FROM person"
-        " WHERE similarity(concat_ws(' ', first_name, last_name, preferred_name), :q) >= 0.2"
+        f" WHERE similarity({NAME_EXPR}, :q) >= 0.2"
         " ORDER BY score DESC"
         " LIMIT 20",
         q=q,

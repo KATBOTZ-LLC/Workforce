@@ -8,7 +8,7 @@ substitutions:
   _REPO: workforce
   _BACKEND: wf-api
   _FRONTEND: wf-web
-  _CONNECTOR: wf-connector
+  _SQL_CONNECTION: ''
   _ALLOWED_DOMAIN: katbotz.com
   _GOOGLE_CLIENT_ID: ''
 
@@ -46,9 +46,16 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BACKEND}:$SHORT_SHA
       - --region=${_REGION}
       - --platform=managed
-      - --vpc-connector=${_CONNECTOR}
-      - --vpc-egress=private-ranges-only
-      - --set-secrets=DATABASE_URL=wf-database-url:latest,SESSION_SECRET=wf-session-secret:latest,DOCUMENTS_BUCKET=wf-documents-bucket:latest
+      # Cloud Run's built-in Cloud SQL proxy: the database is reached over a
+      # Unix socket at /cloudsql/<connection>, authenticated by the service
+      # account. No VPC, no connector, no egress config, nothing extra billed.
+      - --add-cloudsql-instances=${_SQL_CONNECTION}
+      # DATABASE_URL and SESSION_SECRET are NOT set here. Cloud Build
+      # substitutions are written to build logs, and roles/editor cannot read
+      # Secret Manager values or grant Cloud Run access to them on this
+      # project, so --set-secrets is unavailable too. They are set by
+      # deploy/w1-12-deploy.sh with `gcloud run services update`, where the
+      # values stay on the operator's machine.
       - --set-env-vars=ALLOWED_DOMAIN=${_ALLOWED_DOMAIN},GOOGLE_CLIENT_ID=${_GOOGLE_CLIENT_ID}
       - --min-instances=0
       - --max-instances=4

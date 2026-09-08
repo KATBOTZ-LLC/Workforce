@@ -25,7 +25,8 @@ Then open **http://localhost:3000/live**.
 Prove the rules bite:
 
 ```bash
-./db/migrate.sh --test      # 20 checks, in a throwaway database
+./db/migrate.sh --test                        # 20 schema/rule checks, throwaway database
+cd backend && ./onboarding_lifecycle_test.sh  # 20 checks, Invited -> Active (needs the API running)
 ```
 
 ## What is built
@@ -37,7 +38,9 @@ Prove the rules bite:
 | Seed data | The real KATBOTZ org: 12 departments, 34 people, 50 seats, 43 holdings, 7 open positions. |
 | Document checklists | **66 requirements across 8 checklists** (worker type x region x contractor mode), from your real onboarding lists. |
 | API | FastAPI + SQLAlchemy on PostgreSQL. Directory, headcount, fuzzy search, form options, roster, and transactional onboarding. |
-| Onboarding | **Working.** One transaction across 6 tables; rollback verified; token stored as SHA-256 only. |
+| Onboarding | **Working end to end.** Create → worker uploads by link → HR approves/rejects → activation gate → Active. 20/20 lifecycle checks. |
+| Document storage | Opaque keys. Local directory today; set `DOCUMENTS_BUCKET` and it becomes Cloud Storage with no schema change. |
+| Real roster import | `db/import/roster_template.csv` (34 real people pre-filled) + `import_roster.py`. Dry-run by default. |
 | Frontend | `/live` reads all of the above and can create a worker. Access tier changes what the database returns. |
 | GCP W1-06..W1-13 | One script per work item, plus `cloudbuild.yaml`. W1-11 and W1-13 **done**; the rest **blocked: no billing account linked to `workforce-503018`**. See `deploy/README.md`. |
 
@@ -111,10 +114,12 @@ that, `./deploy/01-enable-apis.sh` onward runs unchanged.
   does not exist otherwise.
 * The other 18 frontend pages still read `localStorage` via `workforceStore.tsx`.
   `/live` is the first page on real data.
-* Document **upload and HR verification** — the checklist rows exist and the
-  activation gate is computed, but nothing moves a document to Approved yet, so
-  no engagement can reach Active.
-* The `/onboard/[token]` page still uses the browser store, so the links the
-  roster hands out are not yet live.
+* **The `/onboard/[token]` page and the HR verification screen are API-less.**
+  The endpoints work and are tested, but the two pages still read the browser
+  store, so nobody can use this without curl yet. That is the next job.
+* **Real employment data.** The database holds 34 real people and zero
+  engagements. Worker type, join date and work location are not recorded
+  anywhere and cannot be inferred — fill
+  `db/import/roster_template.csv` and run the importer.
 * Modules 3, 4, 6, 8 (immigration, eligibility, performance, tasks) have tables
   and constraints but no endpoints.

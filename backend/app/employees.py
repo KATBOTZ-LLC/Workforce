@@ -263,6 +263,86 @@ def roster(email: str = Depends(get_current_user_email)) -> list[RosterRow]:
     ]
 
 
+class ActivateOut(BaseModel):
+    employment_id: str
+    employment_code: str
+    stage: str
+    message: str
+
+
+@router.post("/{employment_id}/activate", response_model=ActivateOut)
+def activate(employment_id: str, email: str = Depends(get_current_user_email)) -> ActivateOut:
+    """Turn a verified engagement into one that may sign in.
+
+    "No account until every mandatory document is approved" is enforced here the
+    way the blueprint specifies: the count runs inside a transaction that holds
+    a row lock on EMPLOYMENT. Two HR users clicking Activate at the same moment
+    cannot both succeed — the second waits for the first, then re-reads and sees
+    the new stage.
+
+    It deliberately does NOT create a USER_ACCOUNT row. That table needs
+    Google's immutable subject id, which does not exist until the person
+    actually signs in, and it is NOT NULL because a login with no subject id
+    cannot be matched to a Google identity later. The account is created on
+    first sign-in; activation is what permits that sign-in to happen.
+    """
+    profile = _require_hr(email)
+
+    with db.transaction() as tx:
+        e = tx.one(
+            "SELECT employment_id, employment_code, stage, person_id"
+            "  FROM employment WHERE employment_id = :eid FOR UPDATE",
+            eid=employment_id,
+        )
+        if e is None:
+            raise HTTPException(status_code=404, detail="No such engagement")
+        if e["stage"] == "Active":
+            return ActivateOut(
+                employment_id=employment_id, employment_code=e["employment_code"],
+                stage="Active", message="Already active.",
+            )
+
+        outstanding = tx.rows(
+            "SELECT r.document_name FROM worker_document wd"
+            "  JOIN document_requirement r ON r.requirement_id = wd.requirement_id"
+            " WHERE wd.employment_id = :eid AND wd.is_mandatory AND wd.status <> 'Approved'"
+            " ORDER BY r.document_name",
+            eid=employment_id,
+        )
+        if outstanding:
+            names = ", ".join(r["document_name"] for r in outstanding[:5])
+            more = f" and {len(outstanding) - 5} more" if len(outstanding) > 5 else ""
+            raise HTTPException(
+                status_code=409,
+                detail=f"{len(outstanding)} mandatory document(s) are not approved: {names}{more}",
+            )
+
+        tx.execute(
+            "UPDATE employment SET stage = 'Active' WHERE employment_id = :eid", eid=employment_id
+        )
+        # Any outstanding onboarding link is spent. Revoked rather than deleted,
+        # so the fact that one was issued survives.
+        tx.execute(
+            "UPDATE onboarding_token SET status = 'expired'"
+            " WHERE employment_id = :eid AND status = 'active'",
+            eid=employment_id,
+        )
+        tx.execute(
+            "INSERT INTO audit_log (actor_person_id, actor_tier, event_category,"
+            "                       entity_type, entity_id, before_state, after_state)"
+            " VALUES (:actor, :tier, 'permission_change', 'employment', :eid,"
+            "         jsonb_build_object('stage', CAST(:before AS text)),"
+            "         jsonb_build_object('stage', 'Active'))",
+            actor=profile.person_id, tier=profile.tier, eid=employment_id, before=e["stage"],
+        )
+
+        return ActivateOut(
+            employment_id=employment_id, employment_code=e["employment_code"], stage="Active",
+            message="Activated. The person may now sign in with Google; their "
+                    "USER_ACCOUNT row is created on first sign-in.",
+        )
+
+
 class OptionsResponse(BaseModel):
     departments: list[dict]
     work_locations: list[dict]
