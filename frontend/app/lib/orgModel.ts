@@ -200,11 +200,51 @@ export function validateOrg(d: OrgData): Issue[] {
     }
   })
 
+  // a role reporting to two different managers via reports_to is organizationally
+  // ambiguous — matrix accountability should use accountable_to/dotted instead
+  const reportsToCount = new Map<RoleId, number>()
+  d.edges.filter(e => e.type === 'reports_to').forEach(e => {
+    reportsToCount.set(e.fromRoleId, (reportsToCount.get(e.fromRoleId) || 0) + 1)
+  })
+  reportsToCount.forEach((n, roleId) => {
+    if (n > 1) {
+      const role = d.roles.find(r => r.id === roleId)
+      warn('multiple_managers', `"${role?.title || roleId}" reports_to ${n} different roles at once.`, roleId)
+    }
+  })
+
   d.unresolvedRefs.forEach(name => {
     warn('unresolved_team_lead', `"${name}" is referenced as a team lead but matches no Person.`, name)
   })
 
   return issues
+}
+
+/**
+ * Would adding a reports_to edge fromRoleId -> toRoleId create a cycle among existing
+ * reports_to edges? Checked BEFORE the edge is added, so the UI can refuse it instead of
+ * only flagging it after the fact via validateOrg.
+ */
+export function reportsToCycleIfAdded(edges: Edge[], fromRoleId: RoleId, toRoleId: RoleId): boolean {
+  if (fromRoleId === toRoleId) return true
+  const up = new Map<RoleId, RoleId[]>()
+  edges.filter(e => e.type === 'reports_to').forEach(e => {
+    const arr = up.get(e.fromRoleId)
+    if (arr) arr.push(e.toRoleId); else up.set(e.fromRoleId, [e.toRoleId])
+  })
+  const arr = up.get(fromRoleId)
+  if (arr) arr.push(toRoleId); else up.set(fromRoleId, [toRoleId])
+  // walk up from toRoleId — if we ever reach fromRoleId, the new edge closes a loop
+  const seen = new Set<RoleId>()
+  const stack = [toRoleId]
+  while (stack.length) {
+    const cur = stack.pop()!
+    if (cur === fromRoleId) return true
+    if (seen.has(cur)) continue
+    seen.add(cur)
+    ;(up.get(cur) || []).forEach(next => stack.push(next))
+  }
+  return false
 }
 
 /* --------------------------------- lookups ------------------------------------ */

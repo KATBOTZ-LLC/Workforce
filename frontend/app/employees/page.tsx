@@ -514,11 +514,28 @@ function WorkerPreview({ worker: w, onClose }: {
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Draft>(pickDraft(w))
+  const [editError, setEditError] = useState('')
   const [viewDoc, setViewDoc] = useState<PreviewWorker['documents'][number] | null>(null)
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft(d => ({ ...d, [k]: v }))
-  const startEdit = () => { setDraft(pickDraft(w)); setEditing(true) }
-  const save = () => { updateWorker(w.id, draft); setEditing(false) }
+  const startEdit = () => { setDraft(pickDraft(w)); setEditError(''); setEditing(true) }
+  const save = () => {
+    // Duplicate-email prevention (see 02-FEATURES.md, "FIX #1") applies on edit too —
+    // otherwise the invariant enforced at creation can be broken right after by a rename.
+    const personalLower = draft.personalEmail.trim().toLowerCase()
+    const professionalLower = draft.professionalEmail.trim().toLowerCase()
+    const dupe = workers.find(other => other.id !== w.id && (
+      other.personalEmail.toLowerCase() === personalLower || other.professionalEmail.toLowerCase() === personalLower ||
+      other.personalEmail.toLowerCase() === professionalLower || other.professionalEmail.toLowerCase() === professionalLower
+    ))
+    if (dupe) {
+      setEditError(`Email already registered to ${dupe.name} (${dupe.type}, ${STAGE_META[dupe.stage].label}). Use a different email or check if this is the same person.`)
+      return
+    }
+    setEditError('')
+    updateWorker(w.id, draft)
+    setEditing(false)
+  }
 
   // Close on Escape (but let Escape cancel edit first).
   useEffect(() => {
@@ -564,6 +581,9 @@ function WorkerPreview({ worker: w, onClose }: {
         </div>
 
         <div className="p-6 space-y-5">
+          {editing && editError && (
+            <div className="text-sm text-brand-burgundy bg-[#F7E7EA] border border-brand-burgundy/30 rounded-lg px-3 py-2">{editError}</div>
+          )}
           {/* quick stats */}
           <div className="grid grid-cols-3 gap-3">
             <PreviewStat label="Documents" value={`${approved}/${w.documents.length}`} />

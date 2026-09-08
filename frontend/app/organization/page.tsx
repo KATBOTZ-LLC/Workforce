@@ -9,13 +9,12 @@ import {
 } from '@/app/lib/workforceStore'
 import { useOrg } from '@/app/lib/orgStore'
 import {
-  EDGE_TYPES, EDGE_TYPE_LABEL, EdgeType, Level, LEVELS, LEVEL_LABEL, OrgData, Role,
+  Edge, EDGE_TYPES, EDGE_TYPE_LABEL, EdgeType, Level, LEVELS, LEVEL_LABEL, OrgData, Person, PersonId, Role, RoleId, Unit, UnitId,
+  personOf, reportsToCycleIfAdded,
 } from '@/app/lib/orgModel'
 import { ROOT_UNIT } from '@/app/lib/orgSource'
 
 export const dynamic = 'force-dynamic'
-
-const ADMIN_ACTOR = 'HR Manager' // acting admin for audit attribution (demo)
 
 /* ---------- role / seniority classification ---------- */
 type Band = 'Lead' | 'Senior' | 'Mid' | 'Junior' | 'Consultant' | 'Intern'
@@ -51,29 +50,53 @@ const DEPT_COLORS: Record<string, string> = {
 const deptColor = (d: string) => DEPT_COLORS[d] || '#64748B'
 
 export default function OrganizationPage() {
+  const role = useQueryParam('role')
+  if (role === 'employee') return <OrgAccessRestricted />
+  return <OrganizationAdminPage />
+}
+
+function OrgAccessRestricted() {
+  return (
+    <>
+      <Sidebar />
+      <div className="min-h-screen bg-brand-off-white with-sidebar flex items-center justify-center px-8">
+        <div className="bg-white rounded-2xl border border-brand-gray p-10 max-w-md text-center">
+          <h1 className="text-lg font-bold text-brand-charcoal mb-2">Organization is admin-only</h1>
+          <p className="text-sm text-brand-slate-gray">This page and its editing tools are limited to HR/Admin accounts.</p>
+          <Link href="/dashboard?role=employee" className="inline-block mt-4 text-sm font-semibold text-brand-royal-blue hover:underline">← Back to Dashboard</Link>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function OrganizationAdminPage() {
   const { workers, orgUnits } = useWorkforce()
   const active = useMemo(() => workers.filter(w => w.status === 'active'), [workers])
   const [tab, setTab] = useState<'chart' | 'departments' | 'projects' | 'structure' | 'audit'>('chart')
 
-  // Group active workers by department.
-  const byDept = useMemo(() => {
-    const map = new Map<string, Worker[]>()
-    active.forEach(w => {
-      const d = w.department || 'Unassigned'
-      if (!map.has(d)) map.set(d, [])
-      map.get(d)!.push(w)
+  // Every figure below is derived from the canonical org data — nothing hardcoded.
+  const org = useOrg()
+  const { counts } = org
+
+  // Departments & People reads the same canonical org data as the Org Chart — same
+  // people, same departments, same roles — so the two views can never disagree. It
+  // previously grouped the separate onboarding-workforce list by its own department
+  // field (Engineering/Sales/Social Media/...), which showed different names entirely.
+  const orgDeptGroups = useMemo(() => {
+    const depts = org.units.filter(u => u.id !== ROOT_UNIT)
+    // Every department is kept, including ones with no roles yet (e.g. Procurement) —
+    // this is meant to be the complete company structure, not just the populated part.
+    const groups = [
+      { id: ROOT_UNIT, name: 'Executive (KATBOTZ)', roles: org.roles.filter(r => r.unitId === ROOT_UNIT) },
+      ...depts.map(u => ({ id: u.id, name: u.name, roles: org.roles.filter(r => r.unitId === u.id) })),
+    ]
+    return groups.map(g => {
+      const sorted = [...g.roles].sort((a, b) => a.level - b.level || a.title.localeCompare(b.title))
+      const lead = sorted.find(r => r.personId !== null)
+      return { ...g, roles: sorted, lead }
     })
-    return Array.from(map.entries())
-      .map(([dept, members]) => {
-        // Lead = most senior; tie-break by who is named most in others' teamLeads.
-        const nameCount = (id: string) => members.filter(m => m.teamLeadIds.includes(id)).length
-        const lead = [...members].sort((a, b) =>
-          (BAND_RANK[bandOf(b)] - BAND_RANK[bandOf(a)]) || (nameCount(b.id) - nameCount(a.id))
-        )[0]
-        return { dept, members, lead }
-      })
-      .sort((a, b) => b.members.length - a.members.length)
-  }, [active])
+  }, [org])
 
   // Collect client projects across everyone (deduped by project name).
   const projects = useMemo(() => {
@@ -87,27 +110,23 @@ export default function OrganizationPage() {
     return Array.from(map.values()).sort((a, b) => b.people.length - a.people.length)
   }, [active])
 
-  // Search across the Departments & People list. A department stays visible only while
-  // it still has a matching member; the whole list is kept in one place so the count
-  // and the rendered cards can never disagree.
+  // Search across the Departments & People list. While searching, a department stays
+  // visible only if it has a matching role; with no search, every department shows
+  // (including empty ones) so the list stays the complete company structure.
   const [peopleQuery, setPeopleQuery] = useState('')
-  const searchedDepts = useMemo(() => {
+  const searchedOrgGroups = useMemo(() => {
     const term = peopleQuery.trim().toLowerCase()
-    return byDept
-      .map(d => ({
-        ...d,
-        total: d.members.length,
-        members: term
-          ? d.members.filter(m => `${m.name} ${m.designation} ${m.department}`.toLowerCase().includes(term))
-          : d.members,
+    return orgDeptGroups
+      .map(g => ({
+        ...g,
+        total: g.roles.length,
+        roles: term
+          ? g.roles.filter(r => `${personOf(org, r)?.displayName || ''} ${r.title}`.toLowerCase().includes(term))
+          : g.roles,
       }))
-      .filter(d => d.members.length > 0)
-  }, [byDept, peopleQuery])
-  const matchedPeople = searchedDepts.reduce((n, d) => n + d.members.length, 0)
-
-  // Every figure below is derived from the canonical org data — nothing hardcoded.
-  const org = useOrg()
-  const { counts } = org
+      .filter(g => !term || g.roles.length > 0)
+  }, [orgDeptGroups, peopleQuery, org])
+  const matchedOrgRoles = searchedOrgGroups.reduce((n, g) => n + g.roles.length, 0)
 
   return (
     <>
@@ -121,6 +140,11 @@ export default function OrganizationPage() {
         </header>
 
         <main className="px-8 py-7 max-w-6xl mx-auto">
+          {org.apiError && (
+            <div className="mb-6 text-sm text-brand-burgundy bg-[#F7E7EA] border border-brand-burgundy/30 rounded-xl px-4 py-3">
+              {org.apiError}
+            </div>
+          )}
           {/* summary strip */}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
             <Stat label="People" value={counts.people} />
@@ -140,8 +164,8 @@ export default function OrganizationPage() {
             ))}
           </div>
 
-          {/* legend (people views only) */}
-          {(tab === 'chart' || tab === 'departments') && (
+          {/* legend (Client Projects still groups the onboarding workforce by seniority band) */}
+          {tab === 'projects' && (
             <div className="flex flex-wrap gap-2 mb-5">
               {(Object.keys(BAND_META) as Band[]).map(b => (
                 <span key={b} className="text-[11px] font-semibold px-2.5 py-1 rounded-full" style={{ color: BAND_META[b].color, background: BAND_META[b].bg }}>{b}</span>
@@ -159,54 +183,59 @@ export default function OrganizationPage() {
             <div className="space-y-5">
               <div className="flex items-center gap-3 flex-wrap">
                 <input type="search" value={peopleQuery} onChange={e => setPeopleQuery(e.target.value)}
-                  placeholder="Search people by name, job title, or department…"
+                  placeholder="Search people by name or role title…"
                   aria-label="Search people"
                   className="text-sm w-full sm:max-w-md" />
                 <span className="text-xs text-brand-slate-gray">
-                  {matchedPeople} {matchedPeople === 1 ? 'person' : 'people'}
+                  {matchedOrgRoles} {matchedOrgRoles === 1 ? 'role' : 'roles'}
                   {peopleQuery.trim() && ` matching “${peopleQuery.trim()}”`}
                 </span>
               </div>
 
-              {matchedPeople === 0 && (
+              {matchedOrgRoles === 0 && (
                 <div className="bg-white rounded-2xl border border-brand-gray p-10 text-center">
                   <p className="text-sm text-brand-charcoal font-medium">No one matches that search.</p>
                   <button onClick={() => setPeopleQuery('')} className="mt-2 text-sm text-brand-royal-blue hover:underline">Clear search</button>
                 </div>
               )}
 
-              {searchedDepts.map(({ dept, members, lead, total }) => {
-                const grouped = groupByBand(members)
+              {searchedOrgGroups.map(({ id, name, roles, lead, total }) => {
+                const grouped = groupRolesByLevel(roles)
+                const leadPerson = lead && personOf(org, lead)
                 return (
-                  <div key={dept} className="bg-white rounded-2xl border border-brand-gray overflow-hidden">
+                  <div key={id} className="bg-white rounded-2xl border border-brand-gray overflow-hidden">
                     <div className="px-6 py-4 border-b border-brand-gray flex items-center justify-between gap-3 flex-wrap">
                       <div>
-                        <h2 className="text-lg font-bold text-brand-charcoal">{dept}</h2>
+                        <h2 className="text-lg font-bold text-brand-charcoal">{name}</h2>
                         <p className="text-sm text-brand-slate-gray">
-                          {members.length < total
-                            ? `${members.length} of ${total} people`
-                            : `${total} ${total === 1 ? 'person' : 'people'}`}
+                          {roles.length < total
+                            ? `${roles.length} of ${total} roles`
+                            : `${total} ${total === 1 ? 'role' : 'roles'}`}
                         </p>
                       </div>
                       {lead && (
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-brand-slate-gray">Led by</span>
                           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-brand-off-white">
-                            <div className="w-7 h-7 rounded-full bg-brand-royal-blue text-white flex items-center justify-center text-[11px] font-bold">{initials(lead.name)}</div>
+                            <div className="w-7 h-7 rounded-full bg-brand-royal-blue text-white flex items-center justify-center text-[11px] font-bold">
+                              {leadPerson ? initials(leadPerson.displayName) : '—'}
+                            </div>
                             <div className="leading-tight">
-                              <p className="text-sm font-semibold text-brand-charcoal">{lead.name}</p>
-                              <p className="text-[11px] text-brand-slate-gray">{lead.designation}</p>
+                              <p className="text-sm font-semibold text-brand-charcoal">{leadPerson?.displayName || lead.title}</p>
+                              <p className="text-[11px] text-brand-slate-gray">{lead.title}</p>
                             </div>
                           </div>
                         </div>
                       )}
                     </div>
                     <div className="p-6 space-y-4">
-                      {(Object.keys(BAND_META) as Band[]).filter(b => grouped[b]?.length).map(b => (
-                        <div key={b}>
-                          <p className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: BAND_META[b].color }}>{b} · {grouped[b].length}</p>
+                      {roles.length === 0 ? (
+                        <p className="text-sm text-brand-slate-gray">No roles in this department yet.</p>
+                      ) : LEVELS.filter(l => grouped[l]?.length).map(l => (
+                        <div key={l}>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide mb-2 text-brand-slate-gray">{LEVEL_LABEL[l]} · {grouped[l]!.length}</p>
                           <div className="flex flex-wrap gap-2">
-                            {grouped[b].map(m => <PersonChip key={m.id} w={m} isLead={m.id === lead?.id} />)}
+                            {grouped[l]!.map(r => <OrgRoleChip key={r.id} org={org} role={r} isLead={r.id === lead?.id} />)}
                           </div>
                         </div>
                       ))}
@@ -250,6 +279,28 @@ function groupByBand(members: Worker[]): Record<Band, Worker[]> {
     ;(out[b] ||= []).push(m)
   })
   return out
+}
+
+function groupRolesByLevel(roles: Role[]): Partial<Record<Level, Role[]>> {
+  const out: Partial<Record<Level, Role[]>> = {}
+  roles.forEach(r => { (out[r.level] ||= []).push(r) })
+  return out
+}
+
+function OrgRoleChip({ org, role, isLead }: { org: OrgData; role: Role; isLead?: boolean }) {
+  const person = personOf(org, role)
+  const name = person?.displayName || role.title
+  return (
+    <div className={`flex items-center gap-2 pl-1.5 pr-3 py-1.5 rounded-full border bg-white ${role.isOpen ? 'border-dashed border-brand-slate-gray/60' : 'border-brand-gray'}`}>
+      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0 ${role.isOpen ? 'border-2 border-dashed border-brand-slate-gray text-brand-slate-gray' : 'bg-brand-royal-blue text-white'}`}>
+        {role.isOpen ? '—' : initials(name)}
+      </div>
+      <div className="leading-tight">
+        <p className="text-sm font-medium text-brand-charcoal flex items-center gap-1">{name}{isLead && <span className="text-[10px]">★</span>}</p>
+        <p className="text-[11px] text-brand-slate-gray">{role.isOpen ? 'Open role' : role.title}</p>
+      </div>
+    </div>
+  )
 }
 
 /* ---------- org chart: relationship graph ---------- */
@@ -736,7 +787,13 @@ function OrgChart() {
       : e.kind === 'structure' ? 0.45 : e.kind === 'dotted' ? 0.55 : e.kind === 'derived' ? 0.75 : 0.85
 
   return (
-    <div ref={viewportRef}
+    <div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-3 text-[11px] text-brand-slate-gray">
+        <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0 border-t-2 border-brand-charcoal" /> Reports to / Accountable to — confirmed relationship</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0 border-t-2 border-dashed" style={{ borderColor: '#64748B' }} /> Inferred from level — not a confirmed relationship</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0 border-t-2" style={{ borderColor: '#94A3B8' }} /> Department structure only</span>
+      </div>
+      <div ref={viewportRef}
       className="relative w-full rounded-2xl border border-brand-gray bg-[radial-gradient(circle,#E2E8F0_1px,transparent_1px)] [background-size:22px_22px] bg-white overflow-hidden select-none"
       style={{ height: 640, cursor: drag.current ? 'grabbing' : 'grab' }}
       onMouseDown={onDown}
@@ -828,6 +885,7 @@ function OrgChart() {
           </div>
         </div>
       </div>
+    </div>
     </div>
   )
 }
@@ -1000,10 +1058,65 @@ function StructureEditor() {
         {issues.length === 0 && <p className="text-xs text-brand-slate-gray mt-2">No structural problems found.</p>}
       </div>
 
+      {/* ---------------- people & roles ---------------- */}
+      <Section title="People & roles" count={people.length}
+        subtitle="One record per human. Give someone a second role instead of creating them twice."
+        headerExtra={
+          <button onClick={e => { e.stopPropagation(); setShowAdd(v => !v) }}
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-brand-royal-blue text-brand-royal-blue hover:bg-brand-off-white transition">
+            {showAdd ? 'Cancel' : '+ Add person'}
+          </button>
+        }>
+        {showAdd && (
+          <AddPersonForm units={depts} onCancel={() => setShowAdd(false)}
+            onAdd={async (name, title, unitId, level) => {
+              // addPerson must resolve first in API mode — the role needs the
+              // server-assigned person id, not a client-generated one.
+              const p = await addPerson(name)
+              await addRole({ personId: p.id, unitId, level, title, isPrimary: true })
+              setShowAdd(false)
+              note(`Added ${name}`)
+            }} />
+        )}
+
+        <input type="search" value={q} onChange={e => setQ(e.target.value)}
+          placeholder="Search people by name or role…" aria-label="Search people" className="text-sm w-full sm:max-w-md mb-3" />
+        <p className="text-xs text-brand-slate-gray mb-2">Showing {shown.length} of {people.length} people — click a name to edit their roles</p>
+
+        <div className="max-h-[52vh] overflow-y-auto divide-y divide-brand-off-white">
+          {shown.map(p => (
+            <PersonEditor key={p.id} person={p} roles={roles.filter(r => r.personId === p.id)} depts={depts}
+              updatePerson={updatePerson} deletePerson={deletePerson} addRole={addRole} updateRole={updateRole} deleteRole={deleteRole}
+              note={note} defaultOpen={shown.length === 1 && q.trim() !== ''} />
+          ))}
+          {shown.length === 0 && <p className="text-sm text-brand-slate-gray py-8 text-center">Nobody matches that search.</p>}
+        </div>
+      </Section>
+
+      {/* ---------------- open roles ---------------- */}
+      <Section title="Open roles" count={openRoles.length}
+        subtitle="Positions with nobody in them. They are roles, not people — they never count toward headcount.">
+        <div className="flex flex-wrap gap-2">
+          {openRoles.map(r => (
+            <span key={r.id} className="inline-flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-full border border-dashed border-brand-slate-gray/60 bg-brand-off-white">
+              <span className="text-xs text-brand-charcoal">{r.title}</span>
+              <span className="text-[10px] text-brand-slate-gray">{unitName(r.unitId)} · {LEVEL_LABEL[r.level]}</span>
+              <select value="" aria-label={`Fill ${r.title}`}
+                onChange={e => { if (e.target.value) { updateRole(r.id, { personId: e.target.value }); note(`Filled ${r.title}`) } }}
+                className="text-[11px] !py-0.5 !w-24">
+                <option value="">Fill…</option>
+                {people.map(p => <option key={p.id} value={p.id}>{p.displayName}</option>)}
+              </select>
+              <button onClick={() => { if (confirm(`Remove the open "${r.title}" role?`)) { deleteRole(r.id); note('Open role removed') } }} className="text-[11px] text-brand-slate-gray hover:text-brand-burgundy px-1">×</button>
+            </span>
+          ))}
+          {openRoles.length === 0 && <p className="text-sm text-brand-slate-gray">No open roles.</p>}
+        </div>
+      </Section>
+
       {/* ---------------- departments ---------------- */}
-      <div className="bg-white rounded-2xl border border-brand-gray p-6">
-        <h2 className="text-base font-semibold text-brand-charcoal mb-1">Departments</h2>
-        <p className="text-sm text-brand-slate-gray mb-4">Each becomes a column on the chart. Deleting one moves its roles up to KATBOTZ rather than losing them.</p>
+      <Section title="Departments" count={depts.length}
+        subtitle="Each becomes a column on the chart. Deleting one moves its roles up to KATBOTZ rather than losing them.">
         <div className="flex flex-wrap gap-2 mb-4">
           {depts.map(u => {
             const n = roles.filter(r => r.unitId === u.id).length
@@ -1024,104 +1137,12 @@ function StructureEditor() {
           <input value={newUnit} onChange={e => setNewUnit(e.target.value)} placeholder="New department name…" className="text-sm !w-64" />
           <button type="submit" disabled={!newUnit.trim()} className="btn-primary text-sm disabled:opacity-40 disabled:cursor-not-allowed">Add department</button>
         </form>
-      </div>
-
-      {/* ---------------- people & roles ---------------- */}
-      <div className="bg-white rounded-2xl border border-brand-gray p-6">
-        <div className="flex items-center justify-between gap-3 mb-1">
-          <h2 className="text-base font-semibold text-brand-charcoal">People &amp; roles</h2>
-          <button onClick={() => setShowAdd(v => !v)}
-            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-brand-royal-blue text-brand-royal-blue hover:bg-brand-off-white transition">
-            {showAdd ? 'Cancel' : '+ Add person'}
-          </button>
-        </div>
-        <p className="text-sm text-brand-slate-gray mb-4">One record per human. Give someone a second role instead of creating them twice.</p>
-
-        {showAdd && (
-          <AddPersonForm units={depts} onCancel={() => setShowAdd(false)}
-            onAdd={(name, title, unitId, level) => {
-              const p = addPerson(name)
-              addRole({ personId: p.id, unitId, level, title, isPrimary: true })
-              setShowAdd(false)
-              note(`Added ${name}`)
-            }} />
-        )}
-
-        <input type="search" value={q} onChange={e => setQ(e.target.value)}
-          placeholder="Search people by name or role…" aria-label="Search people" className="text-sm w-full sm:max-w-md mb-3" />
-        <p className="text-xs text-brand-slate-gray mb-2">Showing {shown.length} of {people.length} people</p>
-
-        <div className="max-h-[52vh] overflow-y-auto divide-y divide-brand-off-white">
-          {shown.map(p => {
-            const mine = roles.filter(r => r.personId === p.id)
-            return (
-              <div key={p.id} className="py-3">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <input defaultValue={p.displayName} aria-label={`Rename ${p.displayName}`}
-                    onBlur={e => { const v = e.target.value.trim(); if (v && v !== p.displayName) { updatePerson(p.id, { displayName: v }); note(`Renamed to ${v}`) } }}
-                    className="text-sm font-semibold !py-1 !px-2 !w-52 border-transparent hover:border-brand-gray focus:border-brand-royal-blue bg-transparent" />
-                  <span className="text-[11px] text-brand-slate-gray">{mine.length} role{mine.length === 1 ? '' : 's'}</span>
-                  <button onClick={() => { if (confirm(`Delete ${p.displayName}? Their ${mine.length} role(s) and any relationships go too.`)) { deletePerson(p.id); note(`Deleted ${p.displayName}`) } }}
-                    className="ml-auto text-[11px] text-brand-slate-gray hover:text-brand-burgundy">Delete person</button>
-                </div>
-                <div className="mt-1.5 space-y-1.5 pl-2">
-                  {mine.map(r => (
-                    <div key={r.id} className="grid grid-cols-1 sm:grid-cols-[1.4fr_1fr_0.8fr_auto] gap-1.5 items-center">
-                      <input defaultValue={r.title} aria-label="Role title"
-                        onBlur={e => { const v = e.target.value.trim(); if (v && v !== r.title) { updateRole(r.id, { title: v }); note('Role updated') } }}
-                        className="text-xs !py-1" />
-                      <select value={r.unitId} onChange={e => { updateRole(r.id, { unitId: e.target.value }); note('Moved department') }} className="text-xs !py-1">
-                        {depts.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                        <option value={ROOT_UNIT}>KATBOTZ (executive)</option>
-                      </select>
-                      <select value={r.level} onChange={e => { updateRole(r.id, { level: Number(e.target.value) as Level }); note('Level updated') }} className="text-xs !py-1">
-                        {LEVELS.map(l => <option key={l} value={l}>{LEVEL_LABEL[l]}</option>)}
-                      </select>
-                      <button onClick={() => { deleteRole(r.id); note('Role removed') }}
-                        className="text-[11px] text-brand-slate-gray hover:text-brand-burgundy px-1" title="Remove role">×</button>
-                    </div>
-                  ))}
-                  <button onClick={() => { addRole({ personId: p.id, unitId: depts[0]?.id || ROOT_UNIT, level: 2, title: 'New role' }); note(`Added a role for ${p.displayName}`) }}
-                    className="text-[11px] text-brand-royal-blue hover:underline">+ another role</button>
-                </div>
-              </div>
-            )
-          })}
-          {shown.length === 0 && <p className="text-sm text-brand-slate-gray py-8 text-center">Nobody matches that search.</p>}
-        </div>
-      </div>
-
-      {/* ---------------- open roles ---------------- */}
-      <div className="bg-white rounded-2xl border border-brand-gray p-6">
-        <h2 className="text-base font-semibold text-brand-charcoal mb-1">Open roles</h2>
-        <p className="text-sm text-brand-slate-gray mb-4">Positions with nobody in them. They are roles, not people — they never count toward headcount.</p>
-        <div className="flex flex-wrap gap-2">
-          {openRoles.map(r => (
-            <span key={r.id} className="inline-flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-full border border-dashed border-brand-slate-gray/60 bg-brand-off-white">
-              <span className="text-xs text-brand-charcoal">{r.title}</span>
-              <span className="text-[10px] text-brand-slate-gray">{unitName(r.unitId)} · {LEVEL_LABEL[r.level]}</span>
-              <select value="" aria-label={`Fill ${r.title}`}
-                onChange={e => { if (e.target.value) { updateRole(r.id, { personId: e.target.value }); note(`Filled ${r.title}`) } }}
-                className="text-[11px] !py-0.5 !w-24">
-                <option value="">Fill…</option>
-                {people.map(p => <option key={p.id} value={p.id}>{p.displayName}</option>)}
-              </select>
-              <button onClick={() => { deleteRole(r.id); note('Open role removed') }} className="text-[11px] text-brand-slate-gray hover:text-brand-burgundy px-1">×</button>
-            </span>
-          ))}
-          {openRoles.length === 0 && <p className="text-sm text-brand-slate-gray">No open roles.</p>}
-        </div>
-      </div>
+      </Section>
 
       {/* ---------------- relationships ---------------- */}
-      <div className="bg-white rounded-2xl border border-brand-gray p-6">
-        <h2 className="text-base font-semibold text-brand-charcoal mb-1">Relationships</h2>
-        <p className="text-sm text-brand-slate-gray mb-4">
-          The only thing that draws a connector. Nothing is inferred from level or department —
-          if a reporting line is unknown, leave it out and the card simply stands alone.
-        </p>
-
-        <AddEdgeForm roles={roles} caption={roleCaption}
+      <Section title="Relationships" count={edges.length}
+        subtitle="The only thing that draws a connector. Nothing is inferred from level or department — if a reporting line is unknown, leave it out and the card simply stands alone.">
+        <AddEdgeForm roles={roles} edges={edges} caption={roleCaption}
           onAdd={(from, to, type) => { addEdge(from, to, type); note('Relationship added') }} />
 
         <div className="mt-4 space-y-1.5 max-h-[40vh] overflow-y-auto">
@@ -1138,13 +1159,103 @@ function StructureEditor() {
                 <span className="font-medium text-brand-charcoal">{from ? roleCaption(from) : '⚠ missing role'}</span>
                 <span className="text-brand-slate-gray whitespace-nowrap">— {EDGE_TYPE_LABEL[e.type].toLowerCase()} →</span>
                 <span className="font-medium text-brand-charcoal">{to ? roleCaption(to) : '⚠ missing role'}</span>
-                <button onClick={() => { deleteEdge(e.id); note('Relationship removed') }}
+                <button onClick={() => { if (confirm('Remove this relationship?')) { deleteEdge(e.id); note('Relationship removed') } }}
                   className="ml-auto text-brand-slate-gray hover:text-brand-burgundy px-1">×</button>
               </div>
             )
           })}
         </div>
+      </Section>
+    </div>
+  )
+}
+
+/** Collapsed by default so the tab reads as a scannable list of sections, not a wall of
+ * forms — expand only the one you came to edit. */
+function Section({ title, subtitle, count, headerExtra, defaultOpen = false, children }: {
+  title: string; subtitle?: string; count?: number; headerExtra?: React.ReactNode
+  defaultOpen?: boolean; children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  // Not a <button> — headerExtra (e.g. "+ Add person") can itself be a button, and
+  // nesting <button> inside <button> is invalid HTML that React warns about at
+  // hydration. A div with the same keyboard semantics avoids that without losing
+  // accessibility.
+  return (
+    <div className="bg-white rounded-2xl border border-brand-gray overflow-hidden">
+      <div role="button" tabIndex={0}
+        onClick={() => setOpen(o => !o)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o) } }}
+        className="w-full flex items-start justify-between gap-3 p-6 text-left cursor-pointer">
+        <div>
+          <h2 className="text-base font-semibold text-brand-charcoal flex items-center gap-2">
+            {title}
+            {count !== undefined && <span className="text-xs font-normal px-2 py-0.5 rounded-full bg-brand-off-white text-brand-slate-gray">{count}</span>}
+          </h2>
+          {subtitle && <p className="text-sm text-brand-slate-gray mt-0.5">{subtitle}</p>}
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {headerExtra}
+          <span className={`text-brand-slate-gray transition-transform ${open ? 'rotate-180' : ''}`}>⌄</span>
+        </div>
       </div>
+      {open && <div className="px-6 pb-6 -mt-1">{children}</div>}
+    </div>
+  )
+}
+
+/** One person, collapsed to a name + role summary until clicked — editing 34 people's
+ * roles inline all at once is what made this tab unreadable. */
+function PersonEditor({ person: p, roles: mine, depts, updatePerson, deletePerson, addRole, updateRole, deleteRole, note, defaultOpen }: {
+  person: Person; roles: Role[]; depts: Unit[]
+  updatePerson: (id: PersonId, patch: Partial<Person>) => Promise<void>
+  deletePerson: (id: PersonId) => Promise<void>
+  addRole: (r: { personId: PersonId | null; unitId: UnitId; level: Level; title: string; isPrimary?: boolean }) => Promise<Role>
+  updateRole: (id: RoleId, patch: Partial<Role>) => Promise<void>
+  deleteRole: (id: RoleId) => Promise<void>
+  note: (m: string) => void
+  defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(!!defaultOpen)
+  const summary = mine.length === 0 ? 'No roles' : mine.length === 1 ? mine[0].title : `${mine.length} roles`
+  return (
+    <div className="py-2">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center gap-2 text-left py-1">
+        <span className="text-sm font-semibold text-brand-charcoal">{p.displayName}</span>
+        <span className="text-[11px] text-brand-slate-gray">{summary}</span>
+        <span className={`ml-auto text-brand-slate-gray text-xs transition-transform ${open ? 'rotate-180' : ''}`}>⌄</span>
+      </button>
+      {open && (
+        <div className="pl-2 pb-1">
+          <div className="flex items-center gap-2 flex-wrap mt-1">
+            <input defaultValue={p.displayName} aria-label={`Rename ${p.displayName}`}
+              onBlur={e => { const v = e.target.value.trim(); if (v && v !== p.displayName) { updatePerson(p.id, { displayName: v }); note(`Renamed to ${v}`) } }}
+              className="text-sm font-semibold !py-1 !px-2 !w-52 border-transparent hover:border-brand-gray focus:border-brand-royal-blue bg-transparent" />
+            <button onClick={() => { if (confirm(`Delete ${p.displayName}? Their ${mine.length} role(s) and any relationships go too.`)) { deletePerson(p.id); note(`Deleted ${p.displayName}`) } }}
+              className="ml-auto text-[11px] text-brand-slate-gray hover:text-brand-burgundy">Delete person</button>
+          </div>
+          <div className="mt-1.5 space-y-1.5 pl-2">
+            {mine.map(r => (
+              <div key={r.id} className="grid grid-cols-1 sm:grid-cols-[1.4fr_1fr_0.8fr_auto] gap-1.5 items-center">
+                <input defaultValue={r.title} aria-label="Role title"
+                  onBlur={e => { const v = e.target.value.trim(); if (v && v !== r.title) { updateRole(r.id, { title: v }); note('Role updated') } }}
+                  className="text-xs !py-1" />
+                <select value={r.unitId} onChange={e => { updateRole(r.id, { unitId: e.target.value }); note('Moved department') }} className="text-xs !py-1">
+                  {depts.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  <option value={ROOT_UNIT}>KATBOTZ (executive)</option>
+                </select>
+                <select value={r.level} onChange={e => { updateRole(r.id, { level: Number(e.target.value) as Level }); note('Level updated') }} className="text-xs !py-1">
+                  {LEVELS.map(l => <option key={l} value={l}>{LEVEL_LABEL[l]}</option>)}
+                </select>
+                <button onClick={() => { if (confirm(`Remove the "${r.title}" role from ${p.displayName}?`)) { deleteRole(r.id); note('Role removed') } }}
+                  className="text-[11px] text-brand-slate-gray hover:text-brand-burgundy px-1" title="Remove role">×</button>
+              </div>
+            ))}
+            <button onClick={() => { addRole({ personId: p.id, unitId: depts[0]?.id || ROOT_UNIT, level: 2, title: 'New role' }); note(`Added a role for ${p.displayName}`) }}
+              className="text-[11px] text-brand-royal-blue hover:underline">+ another role</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1188,18 +1299,31 @@ function AddPersonForm({ units, onAdd, onCancel }: {
   )
 }
 
-function AddEdgeForm({ roles, caption, onAdd }: {
-  roles: Role[]; caption: (r: Role) => string
+function AddEdgeForm({ roles, edges, caption, onAdd }: {
+  roles: Role[]; edges: Edge[]; caption: (r: Role) => string
   onAdd: (fromRoleId: string, toRoleId: string, type: EdgeType) => void
 }) {
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [type, setType] = useState<EdgeType>('reports_to')
+  const [cycleError, setCycleError] = useState('')
   const sorted = [...roles].sort((a, b) => caption(a).localeCompare(caption(b)))
   const ready = from && to && from !== to
   return (
-    <form onSubmit={e => { e.preventDefault(); if (ready) { onAdd(from, to, type); setFrom(''); setTo('') } }}
+    <form onSubmit={e => {
+      e.preventDefault()
+      if (!ready) return
+      // Checked before dispatch — a reports_to cycle should be refused outright, not
+      // just flagged as a validation warning after it's already been committed.
+      if (type === 'reports_to' && reportsToCycleIfAdded(edges, from, to)) {
+        setCycleError('That would create a reporting cycle — one of these roles already reports (directly or indirectly) to the other.')
+        return
+      }
+      setCycleError('')
+      onAdd(from, to, type); setFrom(''); setTo('')
+    }}
       className="grid gap-2 p-4 rounded-xl bg-brand-off-white border border-brand-gray">
+      {cycleError && <p className="text-xs text-brand-burgundy">{cycleError}</p>}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] gap-2 items-end">
         <label className="block"><span className="text-xs font-medium text-brand-charcoal">This role…</span>
           <select value={from} onChange={e => setFrom(e.target.value)} className="text-xs mt-1">
@@ -1223,11 +1347,14 @@ function AddEdgeForm({ roles, caption, onAdd }: {
 
 /* ================= Admin: audit log ================= */
 function AuditLog() {
-  const { auditLog } = useWorkforce()
+  // Reads the org store's own audit trail — the structural edits made in Edit Structure
+  // (people, roles, departments, relationships, reset-to-source) — not the unrelated
+  // workforce store audit log, which tracks a different, legacy org-units system.
+  const { auditLog } = useOrg()
   return (
     <div className="bg-white rounded-2xl border border-brand-gray p-6 max-w-3xl">
       <h2 className="text-base font-semibold text-brand-charcoal mb-1">Structural Audit Log</h2>
-      <p className="text-sm text-brand-slate-gray mb-5">Every change to the organization — who, what, before → after, and when.</p>
+      <p className="text-sm text-brand-slate-gray mb-5">Every change made in Edit Structure — who, what, before → after, and when.</p>
       {auditLog.length === 0 && <p className="text-sm text-brand-slate-gray py-8 text-center">No structural changes recorded yet. Edit the structure to see entries here.</p>}
       <div className="relative pl-6">
         {auditLog.length > 0 && <span className="absolute left-2 top-1 bottom-1 w-px bg-brand-gray" />}

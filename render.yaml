@@ -1,0 +1,37 @@
+# Free-tier hosting for the API (no credit card required).
+#
+# Render builds from backend/Dockerfile — the same image W1-11 produced for
+# Cloud Run, so nothing here is throwaway work. If billing is approved later,
+# the identical Dockerfile deploys to Cloud Run via cloudbuild.yaml.
+#
+# Free plan caveat: the service SPINS DOWN after 15 minutes idle, and the next
+# request takes roughly 50 seconds to wake it. Open the URL a minute before any
+# demo. This is the main practical cost of not having billing.
+services:
+  - type: web
+    name: wf-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: singapore          # closest free region to India
+    healthCheckPath: /api/health
+    autoDeploy: true           # replaces the Cloud Build trigger (W1-12)
+    envVars:
+      # Paste the Neon connection string here in the Render dashboard.
+      # Must start postgresql+psycopg:// and end ?sslmode=require
+      - key: DATABASE_URL
+        sync: false
+      # Render generates and stores this. Equivalent to Secret Manager (W1-09).
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: ALLOWED_DOMAIN
+        value: katbotz.com
+      # The Vercel URL. Set after the frontend deploys.
+      - key: FRONTEND_ORIGIN
+        sync: false
+      # WF_DEV_LOGIN is deliberately absent. Add it ONLY if you accept that the
+      # dev sign-in route exists in a public deployment, and set
+      # WF_DEV_LOGIN_PASSCODE at the same time.

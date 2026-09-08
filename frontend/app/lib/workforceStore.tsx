@@ -7,6 +7,8 @@
  */
 
 import React, { createContext, useContext, useEffect, useReducer, useRef } from 'react'
+import type { Role } from './orgModel'
+import { ROOT_UNIT, SEED_PEOPLE, SEED_ROLES, SEED_UNITS } from './orgSource'
 
 export type WorkerType = 'Employee' | 'Contractor' | 'Intern'
 export type Region = 'India' | 'US'
@@ -512,294 +514,61 @@ export function docsFor(type: WorkerType, location?: string, contractorMode?: Co
 /* ---------------- seed ---------------- */
 // Deterministic seed so server and client first render match (no hydration mismatch).
 const SEED_DATE = '2026-07-10T09:00:00.000Z'
+
+// The workforce roster is derived from the canonical org chart (orgSource.ts) — the same
+// 34 real KATBOTZ people, the same real departments and titles. Everything this store
+// alone is responsible for (contact info, documents, goals, attendance, reviews,
+// notifications, projects) starts empty: this is the real system now, so real usage
+// should fill it in rather than carrying over fabricated demo content.
+const FOUNDER_PERSON_ID = 'person_ashish_katyayan'
+const HR_LEAD_PERSON_ID = 'person_akshat' // real Global HR Lead — used as everyone's hrLead
+
 function seed(): State {
-  const mk = (o: Partial<Worker> & { id: string; token: string; firstName: string; lastName: string; type: WorkerType; stage: Stage; teamLeads?: string[] }): Worker => {
-    const name = `${o.firstName} ${o.lastName}`
-    const slug = name.toLowerCase().replace(/\s+/g, '.')
-    return {
-      id: o.id, token: o.token, firstName: o.firstName, lastName: o.lastName, name,
-      gender: o.gender || 'Prefer not to say', dob: o.dob, about: o.about,
-      personalEmail: o.personalEmail || `${slug}@gmail.com`,
-      professionalEmail: o.professionalEmail || `${slug}@katbotz.com`,
-      phone: o.phone || '+91 90000 00000',
-      country: o.country || 'India', state: o.state || 'Maharashtra', address: o.address || '—',
-      pincode: o.pincode || '400001', timezone: o.timezone || TIMEZONES[0],
-      type: o.type, employmentType: o.employmentType || (o.type === 'Intern' ? 'Part-time' : o.type === 'Contractor' ? 'Contract' : 'Full-time'),
-      designation: o.designation || o.type, department: o.department || 'Engineering',
-      // seed authors team leads by name; resolveTeamLeads() below converts them to ids
-      hrLead: o.hrLead || 'Priya Nair', teamLeadIds: (o.teamLeads || []) as string[],
-      location: o.location || 'India', status: o.status || 'active',
-      dateOfJoining: o.dateOfJoining || SEED_DATE.slice(0, 10), dateOfExit: o.dateOfExit, workExperience: o.workExperience,
-      createdAt: SEED_DATE, expiresAt: '2026-07-17T09:00:00.000Z',
-      stage: o.stage, accountCreated: o.stage === 'active',
-      documents: o.documents || docsFor(o.type, o.location), goals: o.goals || [],
-      notes: o.notes || [], attendance: o.attendance || [], timeSessions: o.timeSessions || [], projects: o.projects || [],
-      reviews: o.reviews || [], feedback: o.feedback || [],
+  const unitNameOf = new Map(SEED_UNITS.map(u => [u.id, u.name]))
+  const primaryRoleOf = new Map<string, Role>()
+  SEED_ROLES.forEach(r => { if (r.personId && r.isPrimary) primaryRoleOf.set(r.personId, r) })
+
+  const hrLeadName = SEED_PEOPLE.find(p => p.id === HR_LEAD_PERSON_ID)?.displayName || ''
+
+  const workers: Worker[] = SEED_PEOPLE.flatMap(p => {
+    const role = primaryRoleOf.get(p.id)
+    if (!role) return [] // every seeded person has exactly one primary role; defensive only
+    const suffix = p.id.replace(/^person_/, '')
+    const [firstName, ...rest] = p.displayName.split(' ')
+    const type: WorkerType = role.level === 4 ? 'Intern' : 'Employee'
+    const department = role.unitId === ROOT_UNIT ? 'Executive' : (unitNameOf.get(role.unitId) || role.unitId)
+    const worker: Worker = {
+      id: `w-${suffix}`, token: `seed-${suffix}`,
+      firstName, lastName: rest.join(' '), name: p.displayName,
+      gender: 'Prefer not to say', dob: undefined, about: undefined,
+      personalEmail: '', professionalEmail: '', phone: '',
+      country: '', state: '', address: '', pincode: '', timezone: TIMEZONES[0],
+      type, employmentType: type === 'Intern' ? 'Part-time' : 'Full-time',
+      designation: role.title, department,
+      hrLead: hrLeadName, teamLeadIds: [], // no real reporting-line edges exist yet — never invented
+      location: '', status: 'active',
+      dateOfJoining: SEED_DATE.slice(0, 10), createdAt: SEED_DATE, expiresAt: '2026-07-17T09:00:00.000Z',
+      stage: 'active', accountCreated: true,
+      documents: docsFor(type, undefined),
+      goals: [], notes: [], attendance: [], timeSessions: [], projects: [], reviews: [], feedback: [],
     }
-  }
-  // doc helpers for seed variety
-  const allApproved = (t: WorkerType, loc = 'India') => docsFor(t, loc).map(d => ({ ...d, status: 'approved' as DocStatus, fileName: `${d.key}.pdf`, uploadedAt: SEED_DATE }))
-  const partial = (t: WorkerType, approvedCount: number, loc = 'India') => docsFor(t, loc).map((d, i) => ({
-    ...d, status: (i < approvedCount ? 'approved' : 'pending') as DocStatus, fileName: `${d.key}.pdf`, uploadedAt: SEED_DATE,
-  }))
-  const workers: Worker[] = [
-    mk({
-      id: 'w-rajesh', token: 'seedrajesh0000000000000000000001',
-      firstName: 'Rajesh', lastName: 'Kumar', gender: 'Male', dob: '1994-03-12', about: 'Backend engineer focused on platform reliability.',
-      type: 'Employee', stage: 'verifying', department: 'Engineering', designation: 'Senior Developer',
-      hrLead: 'Priya Nair', teamLeads: ['Ananya Rao'], workExperience: '5 years', dateOfJoining: '2026-07-01',
-      documents: docsFor('Employee').map((d, i) => ({ ...d, status: (i === 0 ? 'approved' : 'pending') as DocStatus, fileName: `${d.key}.pdf`, uploadedAt: SEED_DATE })),
-    }),
-    mk({
-      id: 'w-maya', token: 'seedmaya000000000000000000000002',
-      firstName: 'Maya', lastName: 'Patel', gender: 'Female', dob: '1991-08-22', about: 'Founder & CEO.',
-      type: 'Employee', stage: 'active', department: "CEO's Office", designation: 'Founder & CEO',
-      hrLead: 'Priya Nair', teamLeads: ['Ravi Shah', 'Karan Singh'], workExperience: '8 years', dateOfJoining: '2024-01-10',
-      documents: docsFor('Employee').map(d => ({ ...d, status: 'approved' as DocStatus, fileName: `${d.key}.pdf`, uploadedAt: SEED_DATE })),
-      goals: [
-        { id: 'g-maya-1', title: 'Ship onboarding revamp', deadline: '2026-07-17', status: 'in_progress', period: 'weekly' },
-        { id: 'g-maya-2', title: 'Finalize Q3 roadmap', deadline: '2026-07-31', status: 'todo', period: 'monthly' },
-        { id: 'g-maya-3', title: 'Grow product team to 12', deadline: '2026-12-31', status: 'in_progress', period: 'yearly' },
-        { id: 'g-maya-4', title: 'Ship weekly release notes', deadline: '2026-07-10', status: 'completed', period: 'weekly' },
-      ],
-      notes: [
-        { id: 'nt-maya-1', kind: 'todo', text: 'Review PR from Rajesh', done: false, createdAt: SEED_DATE },
-        { id: 'nt-maya-2', kind: 'todo', text: 'Prep 1:1 notes for Friday', done: true, createdAt: SEED_DATE },
-        { id: 'nt-maya-3', kind: 'note', text: 'Roadmap sync moved to Thursday 4pm', createdAt: SEED_DATE },
-      ],
-      attendance: [
-        { date: '2026-07-06', status: 'present', markedAt: SEED_DATE },
-        { date: '2026-07-07', status: 'present', markedAt: SEED_DATE },
-        { date: '2026-07-08', status: 'present', markedAt: SEED_DATE },
-        { date: '2026-07-09', status: 'present', markedAt: SEED_DATE },
-        { date: '2026-07-10', status: 'leave', markedAt: SEED_DATE },
-      ],
-      timeSessions: [
-        { id: 'ts-maya-1', date: '2026-07-08', in: '2026-07-08T09:05:00.000Z', out: '2026-07-08T17:30:00.000Z' },
-        { id: 'ts-maya-2', date: '2026-07-09', in: '2026-07-09T09:15:00.000Z', out: '2026-07-09T13:00:00.000Z' },
-        { id: 'ts-maya-3', date: '2026-07-09', in: '2026-07-09T14:00:00.000Z', out: '2026-07-09T18:10:00.000Z' },
-      ],
-      projects: [
-        { id: 'pr-maya-1', name: 'Onboarding Revamp', lead: 'Ravi Shah', startDate: '2026-06-01', status: 'in_progress' },
-      ],
-      reviews: [
-        { id: 'rv-maya-1', period: '30-day', rating: 4, feedback: 'Strong start — owned the onboarding revamp and shipped ahead of schedule. Could delegate more.', reviewer: 'Ravi Shah', createdAt: '2026-06-10T09:00:00.000Z' },
-        { id: 'rv-maya-2', period: '60-day', rating: 5, feedback: 'Consistently high output and great cross-team communication. Ready for more scope.', reviewer: 'Ravi Shah', createdAt: '2026-07-08T09:00:00.000Z' },
-      ],
-      feedback: [
-        { id: 'fb-maya-1', text: 'Discussed Q3 priorities in our 1:1 — aligned on the roadmap and hiring plan.', author: 'Ravi Shah', createdAt: '2026-07-09T09:00:00.000Z' },
-        { id: 'fb-maya-2', text: 'Great job unblocking the design handoff this week.', author: 'Karan Singh', createdAt: '2026-07-11T09:00:00.000Z' },
-      ],
-    }),
-    mk({
-      id: 'w-john', token: 'seedjohn000000000000000000000003',
-      firstName: 'John', lastName: 'Smith', gender: 'Male', dob: '1988-11-02', about: 'Creative contractor for the US region.',
-      type: 'Contractor', stage: 'active', department: 'Social Media', designation: 'Creative Contractor',
-      hrLead: 'Priya Nair', teamLeads: ['Ananya Rao'], location: 'US', country: 'United States', state: 'California',
-      timezone: TIMEZONES[1], workExperience: '10 years', dateOfJoining: '2023-05-15',
-      documents: docsFor('Contractor', 'US').map(d => ({ ...d, status: 'approved' as DocStatus, fileName: `${d.key}.pdf`, uploadedAt: SEED_DATE })),
-    }),
-    mk({
-      id: 'w-sara', token: 'seedsara000000000000000000000004',
-      firstName: 'Sara', lastName: 'Khan', gender: 'Female', dob: '2002-02-18', about: 'Social media intern.',
-      type: 'Intern', stage: 'invited', department: 'Social Media', designation: 'Social Media Intern',
-      hrLead: 'Priya Nair', teamLeads: ['Ravi Shah'], workExperience: '0 years', dateOfJoining: '2026-07-14',
-    }),
+    if (p.id === FOUNDER_PERSON_ID) worker.orgRole = 'founder'
+    if (p.id === HR_LEAD_PERSON_ID) worker.orgRole = 'hr' // real Global HR Lead — his primary role (Chief of Staff) alone wouldn't grant HR access
+    return [worker]
+  })
 
-    /* ---- extra demo variety ---- */
-    mk({
-      id: 'w-arjun', token: 'seedarjun00000000000000000000005',
-      firstName: 'Arjun', lastName: 'Mehta', gender: 'Male', dob: '1993-06-30', about: 'Full-stack engineer, ready for account creation.',
-      type: 'Employee', stage: 'verified', department: 'Engineering', designation: 'Software Engineer',
-      hrLead: 'Priya Nair', teamLeads: ['Ananya Rao'], workExperience: '4 years', dateOfJoining: '2026-07-05',
-      documents: allApproved('Employee'),
-    }),
-    mk({
-      id: 'w-neha', token: 'seedneha00000000000000000000006',
-      firstName: 'Neha', lastName: 'Gupta', gender: 'Female', dob: '1990-01-14', about: 'Regional sales lead for North India.',
-      type: 'Employee', stage: 'active', department: 'Sales', designation: 'Sales Manager',
-      hrLead: 'Karan Singh', teamLeads: ['Ravi Shah'], workExperience: '9 years', dateOfJoining: '2022-09-01',
-      documents: allApproved('Employee'),
-      goals: [
-        { id: 'g-neha-1', title: 'Close Q3 enterprise pipeline', deadline: '2026-09-30', status: 'in_progress', period: 'monthly' },
-        { id: 'g-neha-2', title: 'Onboard 3 channel partners', deadline: '2026-12-31', status: 'todo', period: 'yearly' },
-      ],
-      projects: [{ id: 'pr-neha-1', name: 'Enterprise GTM', lead: 'Ravi Shah', startDate: '2026-04-01', status: 'in_progress' }],
-      attendance: [
-        { date: '2026-07-13', status: 'present', markedAt: SEED_DATE },
-        { date: '2026-07-14', status: 'present', markedAt: SEED_DATE },
-        { date: '2026-07-15', status: 'present', markedAt: SEED_DATE },
-      ],
-    }),
-    mk({
-      id: 'w-wei', token: 'seedwei000000000000000000000007',
-      firstName: 'Wei', lastName: 'Chen', gender: 'Male', dob: '2001-10-05', about: 'Social media intern (US, on OPT).',
-      type: 'Intern', stage: 'invited', department: 'Social Media', designation: 'Content Intern',
-      hrLead: 'Priya Nair', teamLeads: ['Ananya Rao'], location: 'US', country: 'United States', state: 'California',
-      timezone: TIMEZONES[1], workExperience: '0 years', dateOfJoining: '2026-07-20',
-    }),
-    mk({
-      id: 'w-fatima', token: 'seedfatima0000000000000000000008',
-      firstName: 'Fatima', lastName: 'Sheikh', gender: 'Female', dob: '1989-04-19', about: 'HR generalist supporting onboarding.',
-      type: 'Employee', stage: 'active', department: 'HR', designation: 'HR Associate',
-      hrLead: 'Priya Nair', teamLeads: ['Priya Nair'], workExperience: '7 years', dateOfJoining: '2021-11-20',
-      documents: allApproved('Employee'),
-      goals: [{ id: 'g-fatima-1', title: 'Roll out attendance policy', deadline: '2026-08-15', status: 'in_progress', period: 'monthly' }],
-    }),
-    mk({
-      id: 'w-carlos', token: 'seedcarlos0000000000000000000009',
-      firstName: 'Carlos', lastName: 'Ruiz', gender: 'Male', dob: '1992-12-11', about: 'Growth / social contractor (US, via staffing agency).',
-      type: 'Contractor', contractorMode: 'c2c', stage: 'verifying', department: 'Social Media', designation: 'Growth Contractor',
-      hrLead: 'Karan Singh', teamLeads: ['Ravi Shah'], location: 'US', country: 'United States', state: 'Texas',
-      timezone: TIMEZONES[3], workExperience: '6 years', dateOfJoining: '2026-07-08',
-      documents: docsFor('Contractor', 'US', 'c2c').map((d, i) => ({ ...d, status: (i < 2 ? 'approved' : 'pending') as DocStatus, fileName: `${d.key}.pdf`, uploadedAt: SEED_DATE })),
-    }),
-    mk({
-      id: 'w-ananya-i', token: 'seedananyai000000000000000000010',
-      firstName: 'Ananya', lastName: 'Iyer', gender: 'Female', dob: '2000-07-25', about: 'Engineering intern, converting to full-time.',
-      type: 'Intern', stage: 'active', department: 'Engineering', designation: 'Engineering Intern',
-      hrLead: 'Priya Nair', teamLeads: ['Ravi Shah', 'Karan Singh'], workExperience: '1 year', dateOfJoining: '2026-02-01',
-      documents: allApproved('Intern'),
-      goals: [
-        { id: 'g-ananyai-1', title: 'Ship user research summary', deadline: '2026-07-18', status: 'completed', period: 'weekly' },
-        { id: 'g-ananyai-2', title: 'Own the changelog', deadline: '2026-07-31', status: 'in_progress', period: 'monthly' },
-      ],
-    }),
-    mk({
-      id: 'w-diego', token: 'seeddiego00000000000000000000011',
-      firstName: 'Diego', lastName: 'Alvarez', gender: 'Male', dob: '1995-03-08', about: 'Backend contractor, mid-verification.',
-      type: 'Contractor', stage: 'verifying', department: 'Engineering', designation: 'Backend Contractor',
-      hrLead: 'Karan Singh', teamLeads: ['Ananya Rao'], workExperience: '5 years', dateOfJoining: '2026-07-09',
-      documents: partial('Contractor', 1),
-    }),
-    mk({
-      id: 'w-mei', token: 'seedmei000000000000000000000012',
-      firstName: 'Mei', lastName: 'Lin', gender: 'Female', dob: '1991-09-16', about: 'Engineering manager.',
-      type: 'Employee', stage: 'active', department: 'Engineering', designation: 'Engineering Manager',
-      hrLead: 'Priya Nair', teamLeads: ['Ravi Shah'], workExperience: '11 years', dateOfJoining: '2020-06-15',
-      documents: allApproved('Employee'),
-      projects: [{ id: 'pr-mei-1', name: 'Analytics 2.0', lead: 'Karan Singh', startDate: '2026-05-10', status: 'in_progress' }],
-    }),
-    mk({
-      id: 'w-tom', token: 'seedtom000000000000000000000013',
-      firstName: 'Tom', lastName: 'Baker', gender: 'Male', dob: '1985-05-02', about: 'Former finance analyst (offboarded).',
-      type: 'Employee', stage: 'active', department: 'Finance', designation: 'Finance Analyst',
-      hrLead: 'Karan Singh', teamLeads: ['Karan Singh'], workExperience: '12 years', dateOfJoining: '2019-03-01',
-      status: 'inactive', dateOfExit: '2026-06-30',
-      documents: allApproved('Employee'),
-    }),
-
-    /* ---- CEO's Office ---- */
-    mk({
-      id: 'w-ravi', token: 'seedravi000000000000000000000014',
-      firstName: 'Ravi', lastName: 'Shah', gender: 'Male', dob: '1986-02-09', about: 'Chief Operating Officer.',
-      type: 'Employee', stage: 'active', department: "CEO's Office", designation: 'Chief Operating Officer',
-      hrLead: 'Priya Nair', teamLeads: ['Maya Patel'], workExperience: '14 years', dateOfJoining: '2020-01-05',
-      documents: allApproved('Employee'),
-    }),
-
-    /* ---- HR ---- */
-    mk({
-      id: 'w-priya', token: 'seedpriya00000000000000000000015',
-      firstName: 'Priya', lastName: 'Nair', gender: 'Female', dob: '1987-06-28', about: 'Head of People & HR.',
-      type: 'Employee', stage: 'active', department: 'HR', designation: 'HR Manager',
-      hrLead: 'Priya Nair', teamLeads: ['Maya Patel'], workExperience: '13 years', dateOfJoining: '2020-08-01',
-      documents: allApproved('Employee'),
-    }),
-    mk({
-      id: 'w-tara', token: 'seedtara00000000000000000000016',
-      firstName: 'Tara', lastName: 'Bose', gender: 'Female', dob: '2003-01-30', about: 'HR intern.',
-      type: 'Intern', stage: 'active', department: 'HR', designation: 'HR Intern',
-      hrLead: 'Priya Nair', teamLeads: ['Priya Nair'], workExperience: '0 years', dateOfJoining: '2026-06-15',
-      documents: allApproved('Intern'),
-    }),
-
-    /* ---- Finance ---- */
-    mk({
-      id: 'w-karan', token: 'seedkaran00000000000000000000017',
-      firstName: 'Karan', lastName: 'Singh', gender: 'Male', dob: '1984-10-12', about: 'Head of Finance.',
-      type: 'Employee', stage: 'active', department: 'Finance', designation: 'Finance Head',
-      hrLead: 'Priya Nair', teamLeads: ['Maya Patel'], workExperience: '15 years', dateOfJoining: '2019-07-01',
-      documents: allApproved('Employee'),
-    }),
-    mk({
-      id: 'w-dev', token: 'seeddev0000000000000000000000018',
-      firstName: 'Dev', lastName: 'Malhotra', gender: 'Male', dob: '2002-11-08', about: 'Finance intern.',
-      type: 'Intern', stage: 'active', department: 'Finance', designation: 'Finance Intern',
-      hrLead: 'Karan Singh', teamLeads: ['Karan Singh'], workExperience: '0 years', dateOfJoining: '2026-06-20',
-      documents: allApproved('Intern'),
-    }),
-
-    /* ---- Engineering (more depth) ---- */
-    mk({
-      id: 'w-isha', token: 'seedisha00000000000000000000019',
-      firstName: 'Isha', lastName: 'Verma', gender: 'Female', dob: '1996-04-17', about: 'Frontend developer (US, remote).',
-      type: 'Employee', stage: 'active', department: 'Engineering', designation: 'Frontend Developer',
-      hrLead: 'Priya Nair', teamLeads: ['Mei Lin'], workExperience: '3 years', dateOfJoining: '2024-09-01',
-      location: 'US', country: 'United States', state: 'Washington', timezone: TIMEZONES[1],
-      documents: allApproved('Employee', 'US'),
-    }),
-    mk({
-      id: 'w-kabir', token: 'seedkabir00000000000000000000020',
-      firstName: 'Kabir', lastName: 'Anand', gender: 'Male', dob: '2003-05-22', about: 'Engineering intern.',
-      type: 'Intern', stage: 'active', department: 'Engineering', designation: 'Engineering Intern',
-      hrLead: 'Priya Nair', teamLeads: ['Mei Lin'], workExperience: '0 years', dateOfJoining: '2026-06-10',
-      documents: allApproved('Intern'),
-    }),
-
-    /* ---- Sales (more depth) ---- */
-    mk({
-      id: 'w-riya', token: 'seedriya00000000000000000000021',
-      firstName: 'Riya', lastName: 'Sen', gender: 'Female', dob: '1997-08-03', about: 'Sales executive.',
-      type: 'Employee', stage: 'active', department: 'Sales', designation: 'Sales Executive',
-      hrLead: 'Karan Singh', teamLeads: ['Neha Gupta'], workExperience: '2 years', dateOfJoining: '2025-02-01',
-      documents: allApproved('Employee'),
-    }),
-    mk({
-      id: 'w-aditya', token: 'seedaditya0000000000000000000022',
-      firstName: 'Aditya', lastName: 'Rao', gender: 'Male', dob: '2002-12-19', about: 'Sales intern.',
-      type: 'Intern', stage: 'active', department: 'Sales', designation: 'Sales Intern',
-      hrLead: 'Karan Singh', teamLeads: ['Neha Gupta'], workExperience: '0 years', dateOfJoining: '2026-06-25',
-      documents: allApproved('Intern'),
-    }),
-
-    /* ---- Social Media (lead) ---- */
-    mk({
-      id: 'w-zoya', token: 'seedzoya00000000000000000000023',
-      firstName: 'Zoya', lastName: 'Khan', gender: 'Female', dob: '1993-03-27', about: 'Social media manager.',
-      type: 'Employee', stage: 'active', department: 'Social Media', designation: 'Social Media Manager',
-      hrLead: 'Priya Nair', teamLeads: ['Maya Patel'], workExperience: '8 years', dateOfJoining: '2022-04-01',
-      documents: allApproved('Employee'),
-    }),
-  ]
-  const notifications: Notification[] = [
-    { id: 'n-1', title: 'Documents submitted', message: 'Rajesh Kumar submitted documents for review.', kind: 'info', read: false, createdAt: SEED_DATE },
-    { id: 'n-2', title: 'Ready for account', message: 'All documents verified for Arjun Mehta.', kind: 'success', read: false, createdAt: SEED_DATE },
-    { id: 'n-3', title: 'Documents submitted', message: 'Carlos Ruiz submitted documents for review.', kind: 'info', read: false, createdAt: SEED_DATE },
-    { id: 'n-4', title: 'Onboarding complete', message: 'Maya Patel is fully onboarded.', kind: 'success', read: true, createdAt: SEED_DATE },
-    { id: 'n-5', title: 'Worker offboarded', message: 'Tom Baker was marked inactive (exit 30 Jun).', kind: 'warning', read: true, createdAt: SEED_DATE },
-  ]
-  const activity: Activity[] = [
-    { id: 'a-1', message: 'Carlos Ruiz submitted documents', color: '#162660', createdAt: SEED_DATE },
-    { id: 'a-2', message: 'Arjun Mehta fully verified', color: '#10B981', createdAt: SEED_DATE },
-    { id: 'a-3', message: 'Neha Gupta assigned to Enterprise GTM', color: '#5B77C4', createdAt: SEED_DATE },
-    { id: 'a-4', message: 'Rajesh Kumar submitted documents', color: '#162660', createdAt: SEED_DATE },
-    { id: 'a-5', message: 'Maya Patel completed onboarding', color: '#10B981', createdAt: SEED_DATE },
-    { id: 'a-6', message: 'Tom Baker marked inactive', color: '#800020', createdAt: SEED_DATE },
-  ]
-  const leaveRequests: LeaveRequest[] = [
-    { id: 'lr-1', workerId: 'w-neha', type: 'Paid Leave', from: '2026-07-24', to: '2026-07-25', days: 2, reason: 'Family function', status: 'pending', createdAt: SEED_DATE },
-    { id: 'lr-2', workerId: 'w-ananya-i', type: 'Unpaid Leave', from: '2026-07-21', to: '2026-07-21', days: 1, reason: 'Fever', status: 'pending', createdAt: SEED_DATE },
-    { id: 'lr-3', workerId: 'w-maya', type: 'Paid Leave', from: '2026-07-14', to: '2026-07-15', days: 2, reason: 'Short trip', status: 'approved', decidedBy: 'Priya Nair', decidedAt: SEED_DATE, createdAt: SEED_DATE },
-  ]
+  const notifications: Notification[] = []
+  const activity: Activity[] = []
+  const leaveRequests: LeaveRequest[] = []
   const holidays: Holiday[] = [
     { id: 'h-1', date: '2026-08-15', name: 'Independence Day' },
     { id: 'h-2', date: '2026-10-02', name: 'Gandhi Jayanti' },
     { id: 'h-3', date: '2026-10-20', name: 'Diwali' },
     { id: 'h-4', date: '2026-12-25', name: 'Christmas' },
   ]
+
   /* --- build the dynamic org structure from the seeded departments --- */
-  const FOUNDER_ID = 'w-maya'
+  const founderId = workers.find(w => w.orgRole === 'founder')?.id
   const rootUnit: OrgUnit = { id: 'unit-root', name: 'Katbotz', kind: 'company', parentId: null, createdAt: SEED_DATE }
   const activeWorkers = workers.filter(w => w.status === 'active')
   const deptNames = Array.from(new Set(activeWorkers.map(w => w.department)))
@@ -819,43 +588,19 @@ function seed(): State {
   })
   // department leads = most senior active member (excluding the founder)
   deptUnits.forEach(u => {
-    const members = activeWorkers.filter(w => w.department === u.name && w.id !== FOUNDER_ID)
+    const members = activeWorkers.filter(w => w.department === u.name && w.id !== founderId)
     const lead = [...members].sort((a, b) => rank(b) - rank(a))[0]
     if (lead) u.leadId = lead.id
   })
   // founder sits at the company root
-  const founder = workers.find(w => w.id === FOUNDER_ID)
-  if (founder) { founder.orgRole = 'founder'; founder.unitId = rootUnit.id; founder.reportsToId = undefined }
-  // Reporting lines are NOT inferred. Previously every worker was auto-assigned their
-  // department's most senior member as reportsToId, which fabricated a hierarchy that
-  // was never authored. An unknown manager stays undefined.
-  //
-  // Team leads are authored by name; resolve them to ids. A name matching nobody is
-  // recorded as unresolved rather than being repointed at a similar-looking person.
-  const byName = new Map(workers.map(w => [w.name, w.id]))
-  const unresolvedTeamLeadRefs: string[] = []
-  workers.forEach(w => {
-    w.teamLeadIds = w.teamLeadIds
-      .map(n => {
-        const id = byName.get(n)
-        if (id) return id
-        if (!unresolvedTeamLeadRefs.includes(n)) unresolvedTeamLeadRefs.push(n)
-        return ''
-      })
-      .filter(Boolean)
-  })
+  const founder = workers.find(w => w.id === founderId)
+  if (founder) { founder.unitId = rootUnit.id; founder.reportsToId = undefined }
+  // Reporting lines are NOT inferred here, same as the canonical org chart: an unknown
+  // manager stays undefined rather than being guessed from department seniority.
+
   const auditLog: AuditEntry[] = []
-  const monthlyReviews: MonthlyReview[] = [
-    // finalized months with all three ratings + a bonus example
-    { id: 'mr-maya-5', workerId: 'w-maya', month: '2026-05', stage: 'finalized', selfRating: 4, selfComment: 'Shipped the onboarding revamp.', selfSubmittedAt: '2026-05-31T09:00:00.000Z', tlRating: 4, tlFeedback: 'Strong delivery.', tlBy: 'Ravi Shah', tlAt: '2026-06-02T09:00:00.000Z', hrRating: 5, hrFeedback: 'Exceptional cross-team leadership.', hrBy: 'Priya Nair', hrAt: '2026-06-03T09:00:00.000Z', bonusApproved: true, bonusDecidedBy: 'Priya Nair', bonusDecidedAt: '2026-06-04T09:00:00.000Z', finalizedAt: '2026-06-04T09:00:00.000Z' },
-    { id: 'mr-maya-6', workerId: 'w-maya', month: '2026-06', stage: 'finalized', selfRating: 5, selfComment: 'Great month.', selfSubmittedAt: '2026-06-30T09:00:00.000Z', tlRating: 4, tlFeedback: 'Consistent.', tlBy: 'Ravi Shah', tlAt: '2026-07-02T09:00:00.000Z', hrRating: 4, hrFeedback: 'Solid.', hrBy: 'Priya Nair', hrAt: '2026-07-03T09:00:00.000Z', finalizedAt: '2026-07-03T09:00:00.000Z' },
-    // current month — employee submitted, awaiting reviews
-    { id: 'mr-maya-7', workerId: 'w-maya', month: '2026-07', stage: 'employee_submitted', selfRating: 4, selfComment: 'On track with Q3 roadmap.', selfSubmittedAt: SEED_DATE },
-    // Rajesh — bonus-eligible finalized (managers rated above self)
-    { id: 'mr-rajesh-6', workerId: 'w-rajesh', month: '2026-06', stage: 'finalized', selfRating: 3, selfComment: 'Steady progress.', selfSubmittedAt: '2026-06-30T09:00:00.000Z', tlRating: 4, tlFeedback: 'Underrates himself — great work.', tlBy: 'Mei Lin', tlAt: '2026-07-02T09:00:00.000Z', hrRating: 4, hrFeedback: 'Reliable contributor.', hrBy: 'Priya Nair', hrAt: '2026-07-03T09:00:00.000Z', finalizedAt: '2026-07-03T09:00:00.000Z' },
-    // Neha — team-lead review done, awaiting HR
-    { id: 'mr-neha-7', workerId: 'w-neha', month: '2026-07', stage: 'team_lead_review', selfRating: 4, selfComment: 'Closed two big deals.', selfSubmittedAt: SEED_DATE, tlRating: 5, tlFeedback: 'Outstanding quarter.', tlBy: 'Ravi Shah', tlAt: SEED_DATE },
-  ]
+  const monthlyReviews: MonthlyReview[] = []
+  const unresolvedTeamLeadRefs: string[] = [] // nobody has a teamLead reference to resolve yet
   return { workers, notifications, activity, leaveRequests, holidays, orgUnits, auditLog, monthlyReviews, unresolvedTeamLeadRefs }
 }
 
@@ -998,11 +743,15 @@ function reducer(state: State, action: Action): State {
 
     case 'CREATE_ACCOUNT': {
       const w = state.workers.find(x => x.id === action.workerId)
+      // Enforced here, not just via the disabled button in the UI — a worker whose
+      // mandatory documents aren't all approved must never be activated, no matter what
+      // code path calls this action.
+      if (!w || w.accountCreated || w.documents.some(d => d.mandatory !== false && d.status !== 'approved')) return state
       const workers = state.workers.map(x => x.id === action.workerId ? { ...x, accountCreated: true, stage: 'active' as Stage } : x)
       return {
         ...state, workers,
-        notifications: w ? pushNotif(state, { workerId: w.id, title: 'Account created', message: `${w.professionalEmail} is ready. Welcome email sent.`, kind: 'success' }) : state.notifications,
-        activity: w ? pushActivity(state, `${w.name} account created`, '#162660') : state.activity,
+        notifications: pushNotif(state, { workerId: w.id, title: 'Account created', message: `${w.professionalEmail} is ready. Welcome email sent.`, kind: 'success' }),
+        activity: pushActivity(state, `${w.name} account created`, '#162660'),
       }
     }
 
@@ -1176,6 +925,7 @@ function reducer(state: State, action: Action): State {
     }
 
     case 'UPDATE_WORKER': {
+      const before = state.workers.find(x => x.id === action.workerId)
       const workers = state.workers.map(x => {
         if (x.id !== action.workerId) return x
         const merged = { ...x, ...action.patch }
@@ -1184,8 +934,17 @@ function reducer(state: State, action: Action): State {
         return merged
       })
       const w = workers.find(x => x.id === action.workerId)
+      // hrLead is stored as a name string (chosen from a dropdown of current workers),
+      // not an id — so a rename here would otherwise leave every other worker's hrLead
+      // silently pointing at a name that no longer resolves to anyone.
+      // Not scoped to "other" workers — the renamed worker may have been their own
+      // hrLead (a self-reference carried over unchanged in the patch), which needs the
+      // same cascade or it's left pointing at a name that no longer exists.
+      const renamed = before && w && before.name !== w.name
+        ? workers.map(x => (x.hrLead === before.name ? { ...x, hrLead: w.name } : x))
+        : workers
       return {
-        ...state, workers,
+        ...state, workers: renamed,
         activity: w ? pushActivity(state, `${w.name}'s profile updated`, '#5B77C4') : state.activity,
       }
     }
@@ -1487,8 +1246,15 @@ export function WorkforceProvider({ children }: { children: React.ReactNode }) {
     try { localStorage.setItem(KEY, JSON.stringify(state)) } catch { /* ignore */ }
   }, [state])
 
+  // Re-check the original unresolved team-lead names against the CURRENT worker list on
+  // every render, instead of trusting the one-time snapshot computed in seed(). Without
+  // this, a name that starts matching nobody (or later starts matching somebody, e.g. a
+  // worker added or renamed after load) would stay stuck at whatever it was at seed time.
+  const unresolvedTeamLeadRefs = state.unresolvedTeamLeadRefs.filter(name => !state.workers.some(w => w.name === name))
+
   const value: Ctx = {
     ...state,
+    unresolvedTeamLeadRefs,
     createWorker: (p, docs) => {
       const worker: Worker = {
         ...p,

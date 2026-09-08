@@ -66,8 +66,15 @@ temp/
 !frontend/app/lib/
 !frontend/app/lib/**
 
+# Firebase CLI local cache/emulator data (backend/firebase-emulator/)
+.firebase/
+firestore-debug.log
+
 # archived corrupt git internals (never commit)
 .git-corrupt-*
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# demo.sh runtime state (pids, logs, generated passcode)
+.demo/

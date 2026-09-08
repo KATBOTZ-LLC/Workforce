@@ -1,7 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useWorkforce } from '@/app/lib/workforceStore'
+import {
+  GOOGLE_CLIENT_ID, AuthError, fetchMe, internalRoleFor, loadGoogleIdentityServices,
+  loginWithGoogleIdToken, setSessionToken, workerIdFor,
+} from '@/app/lib/authClient'
 
 /* Cool-toned animated ocean/beach backdrop — self-contained SVG, no external assets. */
 function BeachScene() {
@@ -63,6 +67,64 @@ function BeachScene() {
   )
 }
 
+/**
+ * Real Google Sign-In via Google Identity Services. Exchanges the ID token with the
+ * backend (backend/app/auth.py), fetches the resolved org-chart identity + access
+ * tier (backend/app/me.py), and only then redirects — the tier the user lands with is
+ * whatever the backend derived from the org chart, never something chosen in this UI.
+ */
+function GoogleSignIn() {
+  const btnRef = useRef<HTMLDivElement>(null)
+  const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return
+    let cancelled = false
+
+    const handleCredential = async (response: { credential: string }) => {
+      setStatus('loading'); setError('')
+      try {
+        const { session_token } = await loginWithGoogleIdToken(response.credential)
+        setSessionToken(session_token)
+        const me = await fetchMe(session_token)
+        window.location.href = `/dashboard?role=${internalRoleFor(me.tier)}&worker=${workerIdFor(me.person_id)}`
+      } catch (e) {
+        if (cancelled) return
+        setStatus('error')
+        setError(e instanceof AuthError ? e.message : 'Could not reach the sign-in server. Is the backend running?')
+      }
+    }
+
+    loadGoogleIdentityServices()
+      .then(() => {
+        if (cancelled || !btnRef.current) return
+        const google = (window as any).google
+        google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: handleCredential })
+        google.accounts.id.renderButton(btnRef.current, { theme: 'outline', size: 'large', width: 320 })
+      })
+      .catch(() => { if (!cancelled) { setStatus('error'); setError('Could not load Google Sign-In.') } })
+
+    return () => { cancelled = true }
+  }, [])
+
+  if (!GOOGLE_CLIENT_ID) {
+    return (
+      <div className="w-full text-center text-xs text-brand-slate-gray bg-brand-off-white/80 rounded-lg p-3">
+        Google Sign-In isn't configured yet — set <code>NEXT_PUBLIC_GOOGLE_CLIENT_ID</code> once the GCP OAuth client exists.
+      </div>
+    )
+  }
+
+  return (
+    <div className="w-full flex flex-col items-center gap-2">
+      <div ref={btnRef} />
+      {status === 'loading' && <p className="text-xs text-brand-slate-gray">Signing in…</p>}
+      {status === 'error' && <p className="text-xs text-status-error">{error}</p>}
+    </div>
+  )
+}
+
 export default function LoginPage() {
   const { workers } = useWorkforce()
   const [email, setEmail] = useState('')
@@ -115,6 +177,15 @@ export default function LoginPage() {
         )}
 
         <div className="bg-white/85 backdrop-blur-xl rounded-2xl border border-white/70 shadow-2xl p-8 w-full">
+          <div className="mb-6">
+            <p className="text-sm font-medium text-brand-navy mb-3 text-center">Sign in with your KATBOTZ account</p>
+            <GoogleSignIn />
+          </div>
+          <div className="flex items-center gap-3 mb-6">
+            <div className="flex-1 h-px bg-brand-gray" />
+            <span className="text-xs text-brand-slate-gray">or use the demo login</span>
+            <div className="flex-1 h-px bg-brand-gray" />
+          </div>
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
               <label className="block text-sm font-medium text-brand-navy mb-1.5">Email</label>
