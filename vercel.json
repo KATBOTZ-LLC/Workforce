@@ -1,6 +1,0 @@
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "comment": "Frontend on Vercel's free Hobby plan. Set Root Directory to 'frontend' in the project settings; this file lives at the repo root so Vercel finds the monorepo layout.",
-  "buildCommand": "npm run build",
-  "framework": "nextjs"
-}
