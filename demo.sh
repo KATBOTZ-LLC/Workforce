@@ -67,7 +67,14 @@ else
 fi
 
 # --- 2. passcode ------------------------------------------------------------
-PASSCODE="$(python3 -c 'import secrets,string;print("katbotz-"+"".join(secrets.choice(string.ascii_lowercase+string.digits) for _ in range(6)))')"
+# A FIXED passcode for local runs, so it is the same every time and nobody has
+# to hunt for it. Randomised only for --public, where the URL is on the open
+# internet and a guessable passcode would be the weak link.
+if [ "${1:-}" = "--public" ]; then
+  PASSCODE="$(python3 -c 'import secrets,string;print("katbotz-"+"".join(secrets.choice(string.ascii_lowercase+string.digits) for _ in range(6)))')"
+else
+  PASSCODE="${WF_PASSCODE:-katbotz-demo}"
+fi
 echo "$PASSCODE" > "$RUN/passcode.txt"
 
 # --- 3. backend -------------------------------------------------------------
