@@ -95,6 +95,78 @@ WF_DB="postgresql://wf_app:$PW@127.0.0.1:5433/workforce" ./db/migrate-remote.sh
    console.cloud.google.com/cloud-build/repositories > Connect repository >
    `KATBOTZ-LLC/Workforce`. The manual deploy in W1-12 works without it.
 
+## Google sign-in (W2-02)
+
+Configured 2026-09-09. Client ID lives in `backend/.env` and
+`frontend/.env.local`, both gitignored.
+
+### How it is set up
+
+* **Audience: Internal.** The project sits in the katbotz.com Workspace org, so
+  Internal restricts sign-in to company accounts and avoids Google's app
+  verification process entirely. External would have meant a review.
+* **Authorized JavaScript origins** — both of these, exactly:
+  ```
+  http://localhost:3000
+  https://wf-web-nkec6huiaq-el.a.run.app
+  ```
+  No trailing slash. `https` for the deployed one. A mismatch fails silently
+  with a generic Google error rather than anything that names the cause.
+* **Authorized redirect URIs: EMPTY.** The Google Identity Services button flow
+  posts an ID token to our own endpoint; it never uses a redirect URI. Adding
+  one does nothing, and its absence is not the cause of any error you hit.
+* **The client secret is not used and not stored.** The browser flow needs only
+  the client ID, which is a public identifier that ships inside the page. If a
+  secret is ever exposed, reset it — nothing depends on it.
+
+### How it works in the code
+
+1. `frontend/app/page.tsx` loads Google Identity Services and renders the button
+2. Google returns an ID token to the browser
+3. The browser posts it to `POST /api/auth/google`
+4. `backend/app/auth.py` verifies it with Google's own library, checks the email
+   is verified and the domain matches `ALLOWED_DOMAIN`, then issues our session
+5. `access.py` resolves tier and visibility from the org chart, per request
+
+The session token is stored under `wop-session-token`, the same key the
+passcode sign-in uses — so once Google sign-in works, every page that reads
+that key works too, with no page-level changes.
+
+### The failure you will actually hit
+
+**"<email> is signed in but isn't recognized as a KATBOTZ org member" (403).**
+
+Google authenticated the person correctly; the lookup in `PERSON_EMAIL` found
+nothing. Every seeded address is a **convention guess**
+(`firstname@katbotz.com`, disambiguated on collision), and real addresses often
+differ — `aayushi111@katbotz.com` versus the seeded `ayushi@katbotz.com`, for
+instance.
+
+`PERSON_EMAIL` holds several addresses per person by design, so the fix is to
+add the real one rather than replace the guess:
+
+```sql
+INSERT INTO person_email (person_id, email_type, email)
+SELECT p.person_id, 'professional', 'real.address@katbotz.com'
+  FROM person p
+  JOIN person_email e ON e.person_id = p.person_id
+ WHERE lower(e.email) = 'guessed.address@katbotz.com';
+```
+
+**Google sign-in cannot work org-wide until HR confirms the real addresses.**
+Do not commit real addresses to this repository — it is public.
+
+### Before making the services public
+
+`WF_DEV_LOGIN=1` is currently set on the deployed `wf-api`, so the passcode
+sign-in exists in the cloud. It is harmless while the services return 403, but
+it must be removed **in the same change** that grants public access, not after:
+
+```
+gcloud run services update wf-api --region=asia-south1 \
+  --remove-env-vars WF_DEV_LOGIN,WF_DEV_LOGIN_PASSCODE
+```
+
 ## Read this before running W1-07: private IP vs local development
 
 W1-07 (private IP) and W1-08 (local Auth Proxy) conflict, and the plan does not
