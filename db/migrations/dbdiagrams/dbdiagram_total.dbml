@@ -1,0 +1,434 @@
+// Diagram source only; db/migrate*.sh execute *.sql and ignore this DBML file.
+// Combined Module 1 and Module 2 diagram; shared tables use full Module 1 definitions.
+Project workforce_total {
+  database_type: 'PostgreSQL'
+  Note: 'Modules 1 and 2: core identity, employment, organizational structure, effective-dated assignments, onboarding, and documents.'
+}
+
+// Module 1 tables.
+
+Table department {
+  department_id uuid [pk, not null, default: `gen_random_uuid()`]
+  name text [not null]
+  parent_department_id uuid
+  is_root boolean [not null]
+  is_active boolean [not null]
+
+  Note: '''
+  One department in the organizational hierarchy.
+
+  PostgreSQL partial unique index:
+    uq_department_single_root ON (is_root) WHERE is_root
+
+  This enforces at most one row where is_root is true.
+  Migration 90 seeds the root department with UUID:
+    00000000-0000-0000-0000-000000000001
+  '''
+}
+
+Table role {
+  role_id uuid [pk, not null, default: `gen_random_uuid()`]
+  title text [not null]
+  department_id uuid [not null, default: `'00000000-0000-0000-0000-000000000001'::uuid`]
+  reports_to_role_id uuid
+  base_tier text [not null]
+  is_active boolean [not null]
+
+  // Added later by migration 95.
+  level smallint
+
+  indexes {
+    reports_to_role_id [name: 'ix_role_reports_to']
+  }
+
+  checks {
+    `base_tier IN ('founder', 'hr_admin', 'employee', 'intern')` [name: 'ck_role_base_tier']
+    `level IS NULL OR level BETWEEN 0 AND 4` [name: 'ck_role_level']
+  }
+
+  Note: '''
+  One organizational seat. A role can exist without a current holder.
+
+  department_id defaults to the fixed company-root department.
+
+  reports_to_role_id represents the manager seat, not a manager person.
+
+  base_tier controls application access. level is only the visual band used
+  to lay out the organization chart and was added after the original blueprint.
+  '''
+}
+
+Table person {
+  person_id uuid [pk, not null, default: `gen_random_uuid()`]
+  first_name text [not null]
+  last_name text
+  preferred_name text
+  gender text
+  date_of_birth date
+  nationality text
+  immigration_status text
+  created_at timestamptz [not null, default: `now()`]
+
+  Note: '''
+  The human being, independent of any employment engagement or organizational
+  position.
+
+  PostgreSQL GIN trigram index not expressible exactly in DBML:
+    ix_person_name_trgm
+
+  It indexes:
+    coalesce(first_name, empty)
+    + space
+    + coalesce(last_name, empty)
+    + space
+    + coalesce(preferred_name, empty)
+
+  using gin_trgm_ops for fuzzy directory searching.
+  '''
+}
+
+Table person_role {
+  person_role_id uuid [pk, not null, default: `gen_random_uuid()`]
+  person_id uuid [not null]
+  role_id uuid [not null]
+  is_primary boolean [not null]
+  valid_from date [not null]
+  valid_to date
+
+  checks {
+    `valid_to IS NULL OR valid_to >= valid_from` [name: 'ck_person_role_dates']
+  }
+
+  Note: '''
+  Effective-dated assignment of a person to an organizational seat.
+
+  valid_to IS NULL means the assignment is current.
+
+  PostgreSQL partial indexes:
+    uq_person_role_one_current_primary
+      UNIQUE (person_id)
+      WHERE valid_to IS NULL AND is_primary
+
+    uq_person_role_no_dup_current
+      UNIQUE (person_id, role_id)
+      WHERE valid_to IS NULL
+
+    ix_person_role_current
+      INDEX (person_id)
+      WHERE valid_to IS NULL
+
+  The first rule permits at most one current primary role per person.
+  It does not guarantee that every person has a primary role.
+
+  There is no unique partial index on role_id alone. Therefore, the database
+  does not prevent two people from concurrently occupying the same role.
+
+  The historical behavior is an application policy. UPDATE and DELETE are not
+  revoked from this table for the application database role.
+  '''
+}
+
+Table person_email {
+  email_id uuid [pk, not null, default: `gen_random_uuid()`]
+  person_id uuid [not null]
+  email_type text [not null]
+  email text [not null]
+
+  indexes {
+    (`lower(email)`) [unique, name: 'uq_person_email_lower']
+  }
+
+  checks {
+    `email_type IN ('personal', 'professional')` [name: 'ck_person_email_type']
+  }
+
+  Note: '''
+  Email addresses belonging to a person.
+
+  The unique expression index makes email addresses unique across the entire
+  organization without regard to letter case.
+  '''
+}
+
+Table employment {
+  employment_id uuid [pk, not null, default: `gen_random_uuid()`]
+  employment_code text [not null]
+  person_id uuid [not null]
+  worker_type text [not null]
+  contractor_mode text
+  employment_type text
+  designation text [not null]
+  joined_on date [not null]
+  exited_on date
+  stage text [not null]
+  retention_due_on date [note: 'PostgreSQL GENERATED ALWAYS AS ((exited_on + INTERVAL 3 years)::date) STORED']
+
+  indexes {
+    employment_code [unique, name: 'uq_employment_code']
+  }
+
+  checks {
+    `worker_type IN ('Employee', 'Contractor', 'Intern')` [name: 'ck_employment_worker_type']
+    `contractor_mode IS NULL OR contractor_mode IN ('independent', 'c2c')` [name: 'ck_employment_contractor_mode']
+    `contractor_mode IS NULL OR worker_type = 'Contractor'` [name: 'ck_employment_contractor_mode_scope']
+    `stage IN ('Invited', 'Verifying', 'Verified', 'Active', 'Inactive')` [name: 'ck_employment_stage']
+    `exited_on IS NULL OR exited_on >= joined_on` [name: 'ck_employment_exit_after_join']
+  }
+
+  Note: '''
+  One legal or work engagement belonging to one person.
+
+  Re-engaging the same person creates another employment row.
+
+  retention_due_on is a PostgreSQL stored generated column calculated as
+  three years after exited_on. It is NULL while exited_on is NULL.
+
+  PostgreSQL partial index:
+    ix_employment_retention ON (retention_due_on)
+    WHERE retention_due_on IS NOT NULL
+
+  The separate employment_code_seq sequence allocates employment reference
+  numbers. The sequence is not configured as a column default.
+  '''
+}
+
+Table employment_assignment {
+  assignment_id uuid [pk, not null, default: `gen_random_uuid()`]
+  employment_id uuid [not null]
+  department_id uuid [not null]
+  hr_lead_person_id uuid
+  hr_lead_unresolved text
+  work_location_id uuid [not null]
+  change_reason text
+  valid_from date [not null]
+  valid_to date
+
+  indexes {
+    (department_id, valid_from, valid_to) [name: 'ix_assignment_dept_dates']
+  }
+
+  checks {
+    `valid_to IS NULL OR valid_to >= valid_from` [name: 'ck_employment_assignment_dates']
+  }
+
+  Note: '''
+  Effective-dated placement of an employment in a department and work location.
+
+  valid_to IS NULL means the assignment is current.
+
+  PostgreSQL partial unique index:
+    uq_employment_assignment_one_current
+      UNIQUE (employment_id)
+      WHERE valid_to IS NULL
+
+  This allows at most one current assignment per employment. It does not
+  guarantee that an employment always has an assignment.
+
+  hr_lead_person_id is used when the HR lead is a known person.
+  hr_lead_unresolved preserves imported text when it cannot be resolved.
+  '''
+}
+
+Table work_location {
+  work_location_id uuid [pk, not null, default: `gen_random_uuid()`]
+  name text [not null]
+  country text [not null]
+  region text [not null]
+  timezone text [not null]
+
+  Note: '''
+  Reusable work-location reference data. Region drives region-specific
+  onboarding document requirements.
+  '''
+}
+
+// Module 2 tables.
+
+Table onboarding_token {
+  token_id uuid [pk, not null, default: `gen_random_uuid()`]
+  employment_id uuid [not null]
+  token_hash text [not null]
+  issued_at timestamptz [not null]
+  expires_at timestamptz [not null]
+  status text [not null]
+  reissued_from_token_id uuid
+
+  indexes {
+    token_hash [unique, name: 'uq_onboarding_token_hash']
+  }
+
+  checks {
+    `status IN ('active', 'expired', 'revoked')` [name: 'ck_onboarding_token_status']
+    `expires_at > issued_at` [name: 'ck_onboarding_token_expiry']
+  }
+
+  Note: '''
+  The tokenized onboarding link for one employment engagement.
+
+  Only the token hash is stored. reissued_from_token_id links a replacement
+  token to the previous token; deleting the previous token clears this link.
+
+  The expiry check requires expires_at to follow issued_at. It does not
+  automatically change status when a token expires, and there is no unique
+  constraint limiting an employment to one active token.
+  '''
+}
+
+Table document_requirement {
+  requirement_id uuid [pk, not null, default: `gen_random_uuid()`]
+  worker_type text
+  region text
+  contractor_mode text
+  document_name text [not null]
+  is_mandatory boolean [not null]
+  validity_months integer
+
+  // Added later by migration 95.
+  reference_url text
+
+  checks {
+    `reference_url IS NULL OR reference_url ~ '^https://'` [name: 'ck_document_requirement_url']
+  }
+
+  Note: '''
+  Checklist configuration describing which documents apply to a kind of worker.
+
+  worker_type, region, and contractor_mode are nullable selection criteria.
+  No vocabulary checks are defined on these columns in this table, and
+  validity_months has no positive-value check.
+
+  reference_url links to a form the worker must complete. It belongs to the
+  requirement, rather than an individual upload, and was added after the
+  original blueprint. Its check requires an https:// prefix when present.
+
+  Migration 97 seeds the document requirements.
+  '''
+}
+
+Table worker_document {
+  document_id uuid [pk, not null, default: `gen_random_uuid()`]
+  employment_id uuid [not null]
+  requirement_id uuid [not null]
+  is_mandatory boolean [not null]
+  status text [not null]
+  current_file_id uuid
+  expiry_date date
+
+  indexes {
+    (employment_id, requirement_id) [unique, name: 'uq_worker_document_per_requirement']
+  }
+
+  checks {
+    `status IN ('Outstanding', 'Pending', 'Approved', 'Rejected')` [name: 'ck_worker_document_status']
+  }
+
+  Note: '''
+  One checklist item per requirement per employment engagement, with its
+  current mandatory flag, status, file pointer, and expiry date.
+
+  PostgreSQL partial indexes:
+    ix_worker_document_gate
+      INDEX (employment_id)
+      WHERE is_mandatory AND status <> 'Approved'
+
+    ix_worker_document_pending
+      INDEX (status)
+      WHERE status = 'Pending'
+
+    ix_worker_doc_expiry
+      INDEX (expiry_date)
+      WHERE expiry_date IS NOT NULL
+
+  The gate index supports counting mandatory items awaiting approval; the
+  index itself does not enforce employment activation rules.
+
+  current_file_id is cleared if the referenced file is deleted. Its foreign
+  key ensures that the file exists, but does not ensure that the file belongs
+  to this same checklist item.
+  '''
+}
+
+Table document_file {
+  file_id uuid [pk, not null, default: `gen_random_uuid()`]
+  document_id uuid [not null]
+  file_storage_key text [not null]
+  file_name text [not null]
+  uploaded_at timestamptz [not null]
+  scan_state text [not null]
+  review_status text
+  rejection_reason text
+  reviewed_by_person_id uuid
+  reviewed_at timestamptz
+
+  indexes {
+    file_storage_key [unique, name: 'uq_document_file_storage_key']
+  }
+
+  checks {
+    `scan_state IN ('pending', 'clean', 'infected')` [name: 'ck_document_file_scan_state']
+    `review_status IS NULL OR review_status IN ('Approved', 'Rejected')` [name: 'ck_document_file_review_status']
+    `review_status <> 'Rejected' OR rejection_reason IS NOT NULL` [name: 'ck_document_file_rejection_reason']
+    `review_status IS NULL OR (reviewed_by_person_id IS NOT NULL AND reviewed_at IS NOT NULL)` [name: 'ck_document_file_review_complete']
+  }
+
+  Note: '''
+  One uploaded file version and the review decision made on it.
+
+  A rejected-then-reuploaded document is intended to retain both file rows
+  and their decisions. This historical behavior is an application policy;
+  UPDATE and DELETE are not revoked from this table for wf_app.
+
+  A rejected review requires a non-NULL reason. Any non-NULL review status
+  requires both a reviewer and a review timestamp.
+
+  The scan-state check limits vocabulary, but does not require a clean scan
+  before approval or access. Quarantine behavior is an application policy.
+  '''
+}
+
+Table document_access_log {
+  access_id uuid [pk, not null, default: `gen_random_uuid()`]
+  file_id uuid [not null]
+  actor_person_id uuid [not null]
+  action text [not null]
+  occurred_at timestamptz [not null, default: `now()`]
+
+  checks {
+    `action IN ('view', 'download')` [name: 'ck_document_access_action']
+  }
+
+  Note: '''
+  Records who viewed or downloaded a document file and when.
+
+  Migration 80 revokes direct UPDATE and DELETE from wf_app when that role
+  exists, making this log append-only for the non-owning application role.
+  If the role does not exist, that migration skips its grants and revocations.
+
+  Log rows are still deleted by the foreign-key cascade when their file is
+  deleted. The actor reference restricts deletion of a referenced person.
+  '''
+}
+
+// Module 1 foreign keys and their PostgreSQL referential actions.
+Ref fk_department_parent_department_id: department.parent_department_id > department.department_id [delete: restrict, update: no action]
+Ref fk_role_department_id: role.department_id > department.department_id [delete: set default, update: no action]
+Ref fk_role_reports_to_role_id: role.reports_to_role_id > role.role_id [delete: set null, update: no action]
+Ref fk_person_role_person_id: person_role.person_id > person.person_id [delete: restrict, update: no action]
+Ref fk_person_role_role_id: person_role.role_id > role.role_id [delete: restrict, update: no action]
+Ref fk_person_email_person_id: person_email.person_id > person.person_id [delete: cascade, update: no action]
+Ref fk_employment_person_id: employment.person_id > person.person_id [delete: restrict, update: no action]
+Ref fk_employment_assignment_employment_id: employment_assignment.employment_id > employment.employment_id [delete: cascade, update: no action]
+Ref fk_employment_assignment_department_id: employment_assignment.department_id > department.department_id [delete: restrict, update: no action]
+Ref fk_employment_assignment_hr_lead_person_id: employment_assignment.hr_lead_person_id > person.person_id [delete: set null, update: no action]
+Ref fk_employment_assignment_work_location_id: employment_assignment.work_location_id > work_location.work_location_id [delete: restrict, update: no action]
+
+// Module 2 foreign keys and their PostgreSQL referential actions.
+Ref fk_onboarding_token_employment_id: onboarding_token.employment_id > employment.employment_id [delete: cascade, update: no action]
+Ref fk_onboarding_token_reissued_from_token_id: onboarding_token.reissued_from_token_id > onboarding_token.token_id [delete: set null, update: no action]
+Ref fk_worker_document_employment_id: worker_document.employment_id > employment.employment_id [delete: cascade, update: no action]
+Ref fk_worker_document_requirement_id: worker_document.requirement_id > document_requirement.requirement_id [delete: restrict, update: no action]
+Ref fk_worker_document_current_file_id: worker_document.current_file_id > document_file.file_id [delete: set null, update: no action]
+Ref fk_document_file_document_id: document_file.document_id > worker_document.document_id [delete: cascade, update: no action]
+Ref fk_document_file_reviewed_by_person_id: document_file.reviewed_by_person_id > person.person_id [delete: restrict, update: no action]
+Ref fk_document_access_log_file_id: document_access_log.file_id > document_file.file_id [delete: cascade, update: no action]
+Ref fk_document_access_log_actor_person_id: document_access_log.actor_person_id > person.person_id [delete: restrict, update: no action]

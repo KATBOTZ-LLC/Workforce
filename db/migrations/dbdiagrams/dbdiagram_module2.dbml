@@ -1,0 +1,195 @@
+// Diagram source only; db/migrate*.sh execute *.sql and ignore this DBML file.
+Project workforce_module_2 {
+  database_type: 'PostgreSQL'
+  Note: 'Module 2: onboarding links, document requirements, uploaded files, and document access history.'
+}
+
+Table onboarding_token {
+  token_id uuid [pk, not null, default: `gen_random_uuid()`]
+  employment_id uuid [not null]
+  token_hash text [not null]
+  issued_at timestamptz [not null]
+  expires_at timestamptz [not null]
+  status text [not null]
+  reissued_from_token_id uuid
+
+  indexes {
+    token_hash [unique, name: 'uq_onboarding_token_hash']
+  }
+
+  checks {
+    `status IN ('active', 'expired', 'revoked')` [name: 'ck_onboarding_token_status']
+    `expires_at > issued_at` [name: 'ck_onboarding_token_expiry']
+  }
+
+  Note: '''
+  The tokenized onboarding link for one employment engagement.
+
+  Only the token hash is stored. reissued_from_token_id links a replacement
+  token to the previous token; deleting the previous token clears this link.
+
+  The expiry check requires expires_at to follow issued_at. It does not
+  automatically change status when a token expires, and there is no unique
+  constraint limiting an employment to one active token.
+  '''
+}
+
+Table document_requirement {
+  requirement_id uuid [pk, not null, default: `gen_random_uuid()`]
+  worker_type text
+  region text
+  contractor_mode text
+  document_name text [not null]
+  is_mandatory boolean [not null]
+  validity_months integer
+
+  // Added later by migration 95.
+  reference_url text
+
+  checks {
+    `reference_url IS NULL OR reference_url ~ '^https://'` [name: 'ck_document_requirement_url']
+  }
+
+  Note: '''
+  Checklist configuration describing which documents apply to a kind of worker.
+
+  worker_type, region, and contractor_mode are nullable selection criteria.
+  No vocabulary checks are defined on these columns in this table, and
+  validity_months has no positive-value check.
+
+  reference_url links to a form the worker must complete. It belongs to the
+  requirement, rather than an individual upload, and was added after the
+  original blueprint. Its check requires an https:// prefix when present.
+
+  Migration 97 seeds the document requirements.
+  '''
+}
+
+Table worker_document {
+  document_id uuid [pk, not null, default: `gen_random_uuid()`]
+  employment_id uuid [not null]
+  requirement_id uuid [not null]
+  is_mandatory boolean [not null]
+  status text [not null]
+  current_file_id uuid
+  expiry_date date
+
+  indexes {
+    (employment_id, requirement_id) [unique, name: 'uq_worker_document_per_requirement']
+  }
+
+  checks {
+    `status IN ('Outstanding', 'Pending', 'Approved', 'Rejected')` [name: 'ck_worker_document_status']
+  }
+
+  Note: '''
+  One checklist item per requirement per employment engagement, with its
+  current mandatory flag, status, file pointer, and expiry date.
+
+  PostgreSQL partial indexes:
+    ix_worker_document_gate
+      INDEX (employment_id)
+      WHERE is_mandatory AND status <> 'Approved'
+
+    ix_worker_document_pending
+      INDEX (status)
+      WHERE status = 'Pending'
+
+    ix_worker_doc_expiry
+      INDEX (expiry_date)
+      WHERE expiry_date IS NOT NULL
+
+  The gate index supports counting mandatory items awaiting approval; the
+  index itself does not enforce employment activation rules.
+
+  current_file_id is cleared if the referenced file is deleted. Its foreign
+  key ensures that the file exists, but does not ensure that the file belongs
+  to this same checklist item.
+  '''
+}
+
+Table document_file {
+  file_id uuid [pk, not null, default: `gen_random_uuid()`]
+  document_id uuid [not null]
+  file_storage_key text [not null]
+  file_name text [not null]
+  uploaded_at timestamptz [not null]
+  scan_state text [not null]
+  review_status text
+  rejection_reason text
+  reviewed_by_person_id uuid
+  reviewed_at timestamptz
+
+  indexes {
+    file_storage_key [unique, name: 'uq_document_file_storage_key']
+  }
+
+  checks {
+    `scan_state IN ('pending', 'clean', 'infected')` [name: 'ck_document_file_scan_state']
+    `review_status IS NULL OR review_status IN ('Approved', 'Rejected')` [name: 'ck_document_file_review_status']
+    `review_status <> 'Rejected' OR rejection_reason IS NOT NULL` [name: 'ck_document_file_rejection_reason']
+    `review_status IS NULL OR (reviewed_by_person_id IS NOT NULL AND reviewed_at IS NOT NULL)` [name: 'ck_document_file_review_complete']
+  }
+
+  Note: '''
+  One uploaded file version and the review decision made on it.
+
+  A rejected-then-reuploaded document is intended to retain both file rows
+  and their decisions. This historical behavior is an application policy;
+  UPDATE and DELETE are not revoked from this table for wf_app.
+
+  A rejected review requires a non-NULL reason. Any non-NULL review status
+  requires both a reviewer and a review timestamp.
+
+  The scan-state check limits vocabulary, but does not require a clean scan
+  before approval or access. Quarantine behavior is an application policy.
+  '''
+}
+
+Table document_access_log {
+  access_id uuid [pk, not null, default: `gen_random_uuid()`]
+  file_id uuid [not null]
+  actor_person_id uuid [not null]
+  action text [not null]
+  occurred_at timestamptz [not null, default: `now()`]
+
+  checks {
+    `action IN ('view', 'download')` [name: 'ck_document_access_action']
+  }
+
+  Note: '''
+  Records who viewed or downloaded a document file and when.
+
+  Migration 80 revokes direct UPDATE and DELETE from wf_app when that role
+  exists, making this log append-only for the non-owning application role.
+  If the role does not exist, that migration skips its grants and revocations.
+
+  Log rows are still deleted by the foreign-key cascade when their file is
+  deleted. The actor reference restricts deletion of a referenced person.
+  '''
+}
+
+// Module 1 reference stubs keep this diagram self-contained.
+// See dbdiagram_module1.dbml for the complete table definitions.
+Table employment {
+  employment_id uuid [pk, not null, default: `gen_random_uuid()`]
+
+  Note: 'Module 1 reference only: one legal or work engagement belonging to a person. Other columns are omitted here.'
+}
+
+Table person {
+  person_id uuid [pk, not null, default: `gen_random_uuid()`]
+
+  Note: 'Module 1 reference only: the human being, independent of an employment engagement. Other columns are omitted here.'
+}
+
+// Module 2 foreign keys and their PostgreSQL referential actions.
+Ref fk_onboarding_token_employment_id: onboarding_token.employment_id > employment.employment_id [delete: cascade, update: no action]
+Ref fk_onboarding_token_reissued_from_token_id: onboarding_token.reissued_from_token_id > onboarding_token.token_id [delete: set null, update: no action]
+Ref fk_worker_document_employment_id: worker_document.employment_id > employment.employment_id [delete: cascade, update: no action]
+Ref fk_worker_document_requirement_id: worker_document.requirement_id > document_requirement.requirement_id [delete: restrict, update: no action]
+Ref fk_worker_document_current_file_id: worker_document.current_file_id > document_file.file_id [delete: set null, update: no action]
+Ref fk_document_file_document_id: document_file.document_id > worker_document.document_id [delete: cascade, update: no action]
+Ref fk_document_file_reviewed_by_person_id: document_file.reviewed_by_person_id > person.person_id [delete: restrict, update: no action]
+Ref fk_document_access_log_file_id: document_access_log.file_id > document_file.file_id [delete: cascade, update: no action]
+Ref fk_document_access_log_actor_person_id: document_access_log.actor_person_id > person.person_id [delete: restrict, update: no action]
